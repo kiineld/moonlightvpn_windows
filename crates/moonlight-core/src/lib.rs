@@ -10,6 +10,7 @@ pub mod models;
 pub mod share_link;
 pub mod split_rule;
 pub mod subscription;
+pub mod system_proxy;
 
 pub use models::{
     AppEntry, AppLocale, ConnectionState, Node, SplitMode, SubscriptionInfo, TunnelMode,
