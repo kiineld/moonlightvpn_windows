@@ -47,11 +47,19 @@ jobs:
           Copy-Item dist\Moonlight\moonlight-helper.exe Moonlight-Helper.exe
           Get-ChildItem *.zip, *.exe | Format-Table Name, Length
 
+      # Written with LF, not PowerShell's default CRLF: `sha256sum -c` and
+      # `shasum -c` treat the trailing \r as part of the filename, so a CRLF
+      # file fails to verify on Linux and macOS with "No such file or
+      # directory" while the hashes themselves are perfectly correct.
       - name: Checksums
         run: |
-          Get-FileHash Moonlight-x86_64.zip, Moonlight.exe, Moonlight-Helper.exe -Algorithm SHA256 |
-            ForEach-Object { "$($_.Hash.ToLower())  $(Split-Path $_.Path -Leaf)" } |
-            Out-File -Encoding ascii SHA256SUMS.txt
+          $lines = Get-FileHash Moonlight-x86_64.zip, Moonlight.exe, Moonlight-Helper.exe -Algorithm SHA256 |
+            ForEach-Object { "$($_.Hash.ToLower())  $(Split-Path $_.Path -Leaf)" }
+          [System.IO.File]::WriteAllText(
+            "$PWD\SHA256SUMS.txt",
+            ($lines -join "`n") + "`n",
+            (New-Object System.Text.UTF8Encoding $false)
+          )
           Get-Content SHA256SUMS.txt
 
       # A manual run has no tag to attach a release to, so it stops here —
