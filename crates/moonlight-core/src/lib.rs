@@ -2,6 +2,7 @@
 //! supervisor, its RESTful API client, the config builder, the subscription
 //! client, and the Windows system-proxy layer.
 
+pub mod api;
 pub mod country;
 pub mod format;
 pub mod mihomo_config;

@@ -21,6 +21,7 @@ regex.workspace = true
 anyhow.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
+futures-util.workspace = true
 time.workspace = true
 
 [target.'cfg(windows)'.dependencies]

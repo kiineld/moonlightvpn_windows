@@ -30,6 +30,7 @@ reqwest = { version = "0.12", default-features = false, features = [
     "rustls-tls",
     "json",
     "gzip",
+    "stream",
 ] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "process", "io-util", "net", "time", "sync", "fs"] }
 base64 = "0.22"
@@ -40,6 +41,7 @@ regex = "1"
 anyhow = "1"
 thiserror = "2"
 tracing = "0.1"
+futures-util = "0.3"
 time = { version = "0.3", features = ["formatting", "parsing", "macros", "local-offset"] }
 
 [workspace.dependencies.windows]
