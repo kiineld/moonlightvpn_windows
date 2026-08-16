@@ -2,4 +2,20 @@
 name = "moonlight-helper"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "The privileged Windows service that runs the mihomo core in TUN mode."
+
+[[bin]]
+name = "moonlight-helper"
+path = "src/main.rs"
+
 [dependencies]
+moonlight-core = { path = "../moonlight-core" }
+serde_json.workspace = true
+serde_yaml.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+windows.workspace = true
+windows-service = "0.7"

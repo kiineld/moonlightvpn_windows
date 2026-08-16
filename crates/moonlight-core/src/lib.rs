@@ -5,6 +5,7 @@
 pub mod api;
 pub mod country;
 pub mod format;
+pub mod helper;
 pub mod mihomo_config;
 pub mod models;
 pub mod process;
