@@ -1,0 +1,5 @@
+[package]
+name = "moonlight-helper"
+version.workspace = true
+edition.workspace = true
+[dependencies]

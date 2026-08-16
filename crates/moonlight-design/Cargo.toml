@@ -1,0 +1,11 @@
+[package]
+name = "moonlight-design"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Colour, type and motion tokens, lucide icons and an SVG path renderer for Moonlight."
+
+[dependencies]
+iced.workspace = true

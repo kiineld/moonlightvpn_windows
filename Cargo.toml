@@ -1,0 +1,66 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/moonlight-design",
+    "crates/moonlight-core",
+    "crates/moonlight",
+    "crates/moonlight-helper",
+]
+
+[workspace.package]
+version = "1.0.0"
+edition = "2021"
+rust-version = "1.85"
+license = "MIT"
+repository = "https://github.com/kiineld/moonlightvpn_windows"
+
+[workspace.dependencies]
+iced = { version = "0.14", default-features = false, features = [
+    "wgpu",
+    "tiny-skia",
+    "canvas",
+    "image",
+    "tokio",
+    "advanced",
+] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+serde_yaml = "0.9"
+reqwest = { version = "0.12", default-features = false, features = [
+    "rustls-tls",
+    "json",
+    "gzip",
+] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "process", "io-util", "net", "time", "sync", "fs"] }
+base64 = "0.22"
+url = "2"
+uuid = { version = "1", features = ["v4", "serde"] }
+regex = "1"
+anyhow = "1"
+thiserror = "2"
+tracing = "0.1"
+time = { version = "0.3", features = ["formatting", "macros", "local-offset"] }
+
+[workspace.dependencies.windows]
+version = "0.62"
+features = [
+    "Win32_Foundation",
+    "Win32_System_Registry",
+    "Win32_System_Threading",
+    "Win32_System_JobObjects",
+    "Win32_System_Services",
+    "Win32_System_Com",
+    "Win32_System_Diagnostics_ToolHelp",
+    "Win32_Security",
+    "Win32_Security_Authorization",
+    "Win32_Storage_FileSystem",
+    "Win32_UI_Shell",
+    "Win32_UI_WindowsAndMessaging",
+    "Win32_Networking_WinInet",
+]
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+strip = true

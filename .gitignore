@@ -1,0 +1,9 @@
+/target
+/build
+/dist
+resources/fonts/*.ttf
+resources/fonts/*.otf
+resources/mihomo/mihomo.exe
+resources/mihomo/wintun.dll
+*.pdb
+.DS_Store
