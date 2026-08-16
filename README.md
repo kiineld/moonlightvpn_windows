@@ -7,9 +7,15 @@ which is the same product in SwiftUI, and to
 [moonlightvpn_android](https://github.com/kiineld/moonlightvpn_android), which is
 the same product on Xray-core.
 
+![Connect screen](docs/screenshots/connect.png)
+
 > **Status: the foundation is complete and the app runs; four screens and the
 > tunnel controller are not wired up yet.** See [What is not done
 > yet](#what-is-not-done-yet) before you install this expecting a working VPN.
+>
+> The screenshot above is the real app, built and run from the repository — on
+> macOS, because iced runs there too and Windows hardware was not to hand. It is
+> the same binary and the same widget tree Windows builds.
 
 ## Architecture
 
@@ -311,10 +317,12 @@ error.
 Fonts are Onest (UI/body) and Unbounded (display), embedded in the binary with
 `include_bytes!` rather than registered from a bundle: a portable `.exe` has
 nowhere to register from, and a build that silently fell back to Segoe UI would
-not look like this product. They are fetched as **static instances**, not the
-variable TTFs macOS uses — cosmic-text selects a face by weight and does not
-drive a variable font's `wght` axis, so a variable file renders every weight at
-its default instance and flattens the hierarchy the design leans on.
+not look like this product. They are fetched as **static instances** — one file
+per weight, cut from the variable TTF with `fonttools` — rather than registering
+the variable file and asking for a weight. Weight selection then does not depend
+on how completely the shaper underneath iced supports variable axes, which is a
+detail that can change under you between releases and whose failure mode is
+silent: the type hierarchy flattens and nothing errors.
 
 The connect dial's ring is **full when connected** and sweeps closed as it
 connects. It used to show remaining quota, which meant a perfectly healthy

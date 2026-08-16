@@ -13,12 +13,13 @@
 //! `.exe` has nowhere to register *from*, and a portable build that silently
 //! fell back to Segoe UI would not look like this product.
 //!
-//! **Static instances, not variable TTFs.** cosmic-text (the shaper underneath
-//! iced) selects a face by weight from the font database; it does not set a
-//! variable font's `wght` axis. A variable TTF therefore renders at its default
-//! instance for every weight, which flattens the entire type hierarchy — the
-//! 800 labels this design leans on come out looking like the 500 body. So each
-//! weight is fetched as its own file.
+//! **Static instances, not variable TTFs.** Each weight is cut from the variable
+//! file into its own TTF at fetch time and registered separately, so selecting
+//! a weight is a font-database lookup rather than a variable-axis request. That
+//! keeps the type hierarchy independent of how completely the shaper underneath
+//! iced supports `wght`, which is a detail that can change between releases and
+//! whose failure mode is silent — the weights collapse together and nothing
+//! errors.
 
 use iced::font::{Family, Style, Weight};
 use iced::Font;

@@ -4,13 +4,12 @@
 # The design ships woff2, which no native text stack reads, and Google Fonts
 # ships these two families as variable TTFs only. Both facts matter:
 #
-#   - cosmic-text (the shaper under iced) selects a face by weight from the font
-#     database; it does not set a variable font's `wght` axis. Registering the
-#     variable file directly renders every weight at its default instance, which
-#     flattens the type hierarchy this design leans on — the 800 labels come out
-#     looking like the 500 body.
-#   - So the variable file is downloaded once and instanced into the three
-#     weights the design actually uses, with fontTools.
+#   - Registering the variable file and asking for a weight leaves the result up
+#     to how completely the shaper under iced supports the `wght` axis. When
+#     that support is missing the weights collapse together and nothing errors,
+#     so the failure is invisible until someone compares a screenshot.
+#   - Cutting each weight into its own static TTF makes weight selection a plain
+#     font-database lookup, which every shaper does the same way.
 #
 # fontTools is a build-time dependency only. Without it the script stops rather
 # than silently leaving the variable files in place, because that failure is
