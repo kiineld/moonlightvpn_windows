@@ -40,7 +40,7 @@ regex = "1"
 anyhow = "1"
 thiserror = "2"
 tracing = "0.1"
-time = { version = "0.3", features = ["formatting", "macros", "local-offset"] }
+time = { version = "0.3", features = ["formatting", "parsing", "macros", "local-offset"] }
 
 [workspace.dependencies.windows]
 version = "0.62"
