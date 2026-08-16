@@ -23,7 +23,17 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: cargo fmt --all -- --check
       - run: cargo check --workspace --target x86_64-pc-windows-msvc
-      - run: cargo clippy --workspace --all-targets -- -D warnings
+
+      # Linted for the Windows target, not the host. iced pulls in softbuffer,
+      # whose Linux backends do not compile on a headless runner without X11 and
+      # Wayland development packages — and the Windows configuration is the one
+      # that ships, so it is the one worth linting.
+      - run: cargo clippy --workspace --all-targets --target x86_64-pc-windows-msvc -- -D warnings
+
+      # The Windows lint above cannot see the #[cfg(not(windows))] stubs, and
+      # those are what a developer builds against. moonlight-core does not
+      # depend on iced, so it lints on the host cleanly.
+      - run: cargo clippy -p moonlight-core --all-targets -- -D warnings
 
   # The unit tests, and the integration suite against the real core. This runs
   # the config shapes through `mihomo -t` and starts one for real, which is the

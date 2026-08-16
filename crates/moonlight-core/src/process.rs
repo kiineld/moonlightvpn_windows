@@ -234,7 +234,7 @@ mod job {
                 0
             }
         });
-        (*raw != 0).then(|| HANDLE(*raw as *mut core::ffi::c_void))
+        (*raw != 0).then_some(HANDLE(*raw as *mut core::ffi::c_void))
     }
 
     pub fn assign_current(child: &tokio::process::Child) {
@@ -245,7 +245,7 @@ mod job {
         unsafe {
             // A failure here is not fatal: the core still runs, it just outlives
             // a crashed app, which the orphan sweep at launch then cleans up.
-            let _ = AssignProcessToJobObject(job, HANDLE(raw as *mut core::ffi::c_void));
+            let _ = AssignProcessToJobObject(job, HANDLE(raw));
         }
     }
 }
