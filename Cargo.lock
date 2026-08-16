@@ -1960,7 +1960,7 @@ dependencies = [
 
 [[package]]
 name = "moonlight"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "iced",
  "moonlight-core",
@@ -1974,7 +1974,7 @@ dependencies = [
 
 [[package]]
 name = "moonlight-core"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "base64",
@@ -1996,14 +1996,14 @@ dependencies = [
 
 [[package]]
 name = "moonlight-design"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "iced",
 ]
 
 [[package]]
 name = "moonlight-helper"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "moonlight-core",
  "serde_json",
