@@ -7,6 +7,7 @@ pub mod country;
 pub mod format;
 pub mod mihomo_config;
 pub mod models;
+pub mod process;
 pub mod share_link;
 pub mod split_rule;
 pub mod subscription;
