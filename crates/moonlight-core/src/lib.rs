@@ -8,6 +8,7 @@ pub mod format;
 pub mod helper;
 pub mod mihomo_config;
 pub mod models;
+pub mod preferences;
 pub mod process;
 pub mod share_link;
 pub mod split_rule;
