@@ -9,13 +9,8 @@ the same product on Xray-core.
 
 ![Connect screen](docs/screenshots/connect.png)
 
-> **Status: the foundation is complete and the app runs; four screens and the
-> tunnel controller are not wired up yet.** See [What is not done
-> yet](#what-is-not-done-yet) before you install this expecting a working VPN.
->
-> The screenshot above is the real app, built and run from the repository — on
-> macOS, because iced runs there too and Windows hardware was not to hand. It is
-> the same binary and the same widget tree Windows builds.
+The screenshot is the real app, built and run from this repository — on macOS,
+because iced runs there too. It is the same widget tree Windows builds.
 
 ## Architecture
 
@@ -31,6 +26,9 @@ moonlight-helper   the LocalSystem Windows service that runs the core in TUN mod
 
 One Cargo workspace, no solution file, no MSBuild. `scripts\build.ps1` fetches
 the assets, builds the release binaries and lays out a portable folder.
+
+Seven screens, all real: Connect, Subscription, Apps, Settings, Import, and the
+Logs and Connections diagnostics screens.
 
 ### Why Rust and iced
 
@@ -392,42 +390,79 @@ cargo run -p moonlight
 cargo test --workspace
 ```
 
-230 checks, and they run on any platform — only the four functions that touch the
-registry are stubbed off Windows, and the stubs return failure rather than
-success so a test cannot claim a tunnel it never established.
+**294 unit checks**, which run on any platform — only the functions that touch
+the registry, the service and the shell are stubbed off Windows, and the stubs
+return failure rather than success so a test cannot claim a tunnel it never
+established.
 
 They cover the parts where correctness is not visual: `subscription-userinfo`
 parsing (partial, malformed, absent, zero-means-unlimited), share-link metadata
 across four schemes, URL normalisation (a `file://` or `vless://` link must not
 be rewritten into a plausible `https://` one), config assembly, all three split
-modes and every rule kind the UI offers, the SVG path grammar including the arc
-and smooth-curve cases, Russian's three-way plurals, and the helper protocol —
-including a test that fails if a path field is ever added to it.
+modes and every rule kind, the SVG path grammar including the arc and
+smooth-curve cases, Russian's three-way plurals, version comparison, the update
+script's restore paths, and the helper protocol — including a test that fails if
+a path field is ever added to it.
+
+Two of them build **every screen's widget tree** in the empty and the populated
+state, and again in light mode and English. A `view` that panics on an empty list
+does so the moment a user navigates to it, which is the worst place to find out.
+
+### The integration suite
+
+```bash
+MOONLIGHT_MIHOMO=/path/to/mihomo cargo test --test integration -- --test-threads=1
+```
+
+Skipped, with a note, when the core is not present — a developer without it
+checked out can still run `cargo test`.
+
+It runs the **real mihomo binary**. Every config shape this client can produce
+goes through `mihomo -t`, and one is started for real so the RESTful API — the
+app's entire control channel — is exercised rather than assumed: the selector is
+read, a node is switched, connections and totals are fetched, and the config is
+reloaded in place.
+
+The load-bearing case is **every rule kind in both positions**, as a plain rule
+and inside the `SUB-RULE` matcher that "only these" mode uses. mihomo accepts
+different grammars in the two, and it refuses the *whole config* for one bad
+rule — so a kind that works in one position and not the other is a tunnel that
+stops, not a rule that is skipped.
+
+TUN configs are validated but never started, because a test suite must not ask
+for Administrator or create a network adapter.
+
+On Windows, CI additionally runs tests that touch the machine itself: the
+registry proxy is written and restored (and the restore is asserted, because a
+test that leaves a machine proxied at a dead port is worse than no test), the
+service is installed, pinged over its named pipe, sent a config it must refuse,
+and uninstalled, and the app inventory is checked against the real Start Menu.
+Those are opt-in behind `MOONLIGHT_ADMIN_TESTS=1`: they change machine state,
+which is fine on a runner that is thrown away and not on a laptop.
 
 ## What is not done yet
 
-This is an honest list, not a roadmap. The foundation, the Windows platform
-layer and the app shell are complete and tested; the following are not:
+An honest list, not a roadmap.
 
-- **The tunnel controller is not wired up.** The connect button drives a state
-  machine and the dial animates against it, but it does not yet start the core,
-  write the proxy settings or talk to the helper. Every piece it needs exists and
-  is tested — `MihomoProcess`, `MihomoApi`, `system_proxy`, `helper` — they are
-  not yet composed.
-- **Four screens are placeholders**: Subscription, Apps, Settings and Import,
-  plus the Logs and Connections diagnostics screens. Connect is real.
-- **App inventory is not implemented.** The split-rule engine takes any
-  `PROCESS-NAME` rule and is fully tested; what is missing is the scanner that
-  lists installed applications from the Start Menu and Program Files so the user
-  can pick them from a list instead of typing an executable name.
-- **The updater is not implemented.**
-- **The `mihomo -t` integration suite is not written.** The CI workflow fetches
-  the core and passes its path, but nothing consumes it yet.
-- **Nothing here has been run on Windows.** It was written and tested on macOS,
+- **Nothing has been run interactively on Windows.** It was written on macOS,
   where the whole workspace compiles for `x86_64-pc-windows-msvc` and the UI runs
-  natively. The registry, service, pipe and Wintun paths are type-checked and
-  unit-tested but have never executed on a real Windows machine.
-- The app is unsigned, so SmartScreen will warn on first run.
+  natively. CI does execute the Windows-only paths on a real Windows runner —
+  the registry proxy, the service, the named pipe, the app inventory — and the
+  integration suite drives a real mihomo core. What has not happened is a person
+  sitting in front of it: no session has been left connected carrying a machine's
+  own traffic, and TUN has never created a Wintun adapter, because CI validates
+  those configs without starting them.
+- **The app is unsigned,** so SmartScreen warns on first run. That needs a
+  code-signing certificate bought from a CA; no build configuration substitutes
+  for one. The release workflow signs both executables when `SIGNING_CERTIFICATE`
+  (a base64 `.pfx`) and `SIGNING_PASSWORD` are set as repository secrets, so it
+  is one secret away. An EV certificate clears SmartScreen immediately; an OV one
+  only once the binary has built reputation.
+- Reconnect-on-network-change is not implemented.
+- There is no tray icon, and closing the window quits rather than minimising to
+  one.
+- `moonlight://` is not registered as a URL scheme, so a subscription link from
+  the bot cannot open the app directly.
 
 ## Licence
 

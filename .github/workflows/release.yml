@@ -32,6 +32,31 @@ jobs:
       - name: Build
         run: .\scripts\build.ps1
 
+      # Signing is a no-op unless a certificate is configured. Without it
+      # SmartScreen warns on first run — that needs a code-signing certificate
+      # bought from a CA, and no amount of build configuration substitutes for
+      # one. With SIGNING_CERTIFICATE (base64 .pfx) and SIGNING_PASSWORD set as
+      # repository secrets, both executables are signed and the warning goes.
+      #
+      # An EV certificate clears SmartScreen immediately; an OV one only once
+      # the binary has built enough reputation, which takes downloads and time.
+      - name: Sign
+        if: ${{ env.SIGNING_CERTIFICATE != '' }}
+        env:
+          SIGNING_CERTIFICATE: ${{ secrets.SIGNING_CERTIFICATE }}
+          SIGNING_PASSWORD: ${{ secrets.SIGNING_PASSWORD }}
+        run: |
+          $pfx = Join-Path $env:RUNNER_TEMP 'signing.pfx'
+          [IO.File]::WriteAllBytes($pfx, [Convert]::FromBase64String($env:SIGNING_CERTIFICATE))
+          $signtool = Get-ChildItem "${env:ProgramFiles(x86)}\Windows Kits\10\bin" -Recurse -Filter signtool.exe |
+            Where-Object { $_.FullName -match 'x64' } | Select-Object -First 1
+          foreach ($exe in @('dist\Moonlight\moonlight.exe', 'dist\Moonlight\moonlight-helper.exe')) {
+            & $signtool.FullName sign /fd SHA256 /f $pfx /p $env:SIGNING_PASSWORD `
+              /tr http://timestamp.digicert.com /td SHA256 $exe
+            if ($LASTEXITCODE -ne 0) { throw "signing $exe failed" }
+          }
+          Remove-Item $pfx -Force
+
       # Three assets, because they answer different questions:
       #   - the zip is what a person downloads, and carries the core, the Wintun
       #     driver and the licence alongside the app
