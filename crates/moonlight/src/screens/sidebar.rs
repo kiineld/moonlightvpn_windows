@@ -2,16 +2,18 @@
 //!
 //! It collapses to a 72pt icon rail; the wordmark is the toggle.
 
-use iced::widget::{button, column, container, progress_bar, row, text};
-use iced::{Alignment, Element, Length};
+use iced::widget::{button, canvas, column, container, row, text};
+use iced::{Alignment, Background, Border, Element, Length};
 
 use moonlight_core::preferences::Preferences;
-use moonlight_core::{format, AppLocale};
+use moonlight_core::{format, AppLocale, SubscriptionInfo};
 use moonlight_design::motion::radii;
-use moonlight_design::typography::scale;
+use moonlight_design::typography::{scale, EMPHATIC};
 use moonlight_design::{icon, Icon, Palette};
 
+use crate::components;
 use crate::localization::{t, S};
+use crate::logo::Logo;
 use crate::{hspace, theme, vspace, Message, Page};
 
 /// The collapsed rail's width, from the design.
@@ -24,6 +26,7 @@ pub fn view<'a>(
     current: Page,
     collapsed: bool,
     preferences: &'a Preferences,
+    info: &'a SubscriptionInfo,
 ) -> Element<'a, Message> {
     let width = if collapsed { RAIL } else { EXPANDED };
 
@@ -37,7 +40,7 @@ pub fn view<'a>(
         vspace(Length::Fixed(18.0)),
         items,
         vspace(Length::Fill),
-        quota(palette, locale, collapsed, preferences),
+        quota(palette, locale, collapsed, preferences, info),
     ]
     .padding(14)
     .width(Length::Fixed(width));
@@ -46,39 +49,39 @@ pub fn view<'a>(
         .width(Length::Fixed(width))
         .height(Length::Fill)
         .style(move |_| container::Style {
-            background: Some(iced::Background::Color(palette.bg_deep)),
+            background: Some(Background::Color(palette.bg_deep)),
             ..Default::default()
         })
         .into()
 }
 
-/// The wordmark doubles as the collapse toggle, which is why it is a button
-/// rather than a label with a chevron beside it.
+/// The logo and the wordmark, which together double as the collapse toggle —
+/// which is why this is a button rather than a label with a chevron beside it.
 fn wordmark<'a>(palette: Palette, collapsed: bool) -> Element<'a, Message> {
-    let glyph = if collapsed {
-        Icon::PanelLeftOpen
-    } else {
-        Icon::PanelLeftClose
-    };
+    let mark = canvas(Logo::new(palette))
+        .width(Length::Fixed(38.0))
+        .height(Length::Fixed(38.0));
 
     let inner: Element<'a, Message> = if collapsed {
-        icon(glyph, 20.0, palette.text2)
+        mark.into()
     } else {
         row![
+            mark,
             text("moonlight")
                 .font(moonlight_design::display())
                 .size(scale::LEAD)
                 .color(palette.text),
             hspace(Length::Fill),
-            icon(glyph, 18.0, palette.text_muted),
+            icon(Icon::PanelLeftClose, 17.0, palette.text_muted),
         ]
+        .spacing(10)
         .align_y(Alignment::Center)
         .into()
     };
 
     button(inner)
         .on_press(Message::ToggleSidebar)
-        .padding(10)
+        .padding(if collapsed { 4 } else { 8 })
         .width(Length::Fill)
         .style(move |_, status| theme::nav_button(palette, status))
         .into()
@@ -107,7 +110,7 @@ fn nav_item<'a>(
             icon(page.icon(), 20.0, ink),
             text(t(page.title(), locale))
                 .size(scale::BODY)
-                .font(moonlight_design::ui(moonlight_design::typography::EMPHATIC))
+                .font(moonlight_design::ui(EMPHATIC))
                 .color(ink),
         ]
         .spacing(12)
@@ -130,44 +133,77 @@ fn nav_item<'a>(
 }
 
 /// The quota block. A partial fill is the point here, which is exactly why the
-/// connect dial does not carry it.
+/// connect dial does not carry one.
 fn quota<'a>(
     palette: Palette,
     locale: AppLocale,
     collapsed: bool,
     preferences: &'a Preferences,
+    info: &'a SubscriptionInfo,
 ) -> Element<'a, Message> {
     if collapsed {
+        // 72pt has no room for a plan figure and a bar, and half of one reads
+        // as a clipped layout rather than as a deliberate collapse.
         return vspace(Length::Fixed(0.0)).into();
     }
     if preferences.subscription_url.is_none() {
-        return container(
-            text(t(S::NoSubscription, locale))
+        return button(
+            text(t(S::AddSubscription, locale))
                 .size(scale::META)
                 .color(palette.text_muted),
         )
+        .on_press(Message::Navigate(Page::Import))
         .padding(14)
+        .width(Length::Fill)
+        .style(move |_, status| theme::nav_button(palette, status))
         .into();
     }
 
-    let content = column![
-        text(t(S::Remaining, locale))
-            .size(scale::MICRO)
-            .color(palette.text_muted),
-        text(format::days(None, locale))
+    let (status_label, status_fill) = if info.is_active() {
+        (t(S::Active, locale), palette.accent)
+    } else {
+        (t(S::Expired, locale), palette.danger)
+    };
+
+    let mut content = column![
+        row![
+            components::overline(t(S::Remaining, locale), palette),
+            hspace(Length::Fill),
+            components::pill(
+                status_label.to_string(),
+                status_fill,
+                palette.text_on_accent
+            ),
+        ]
+        .align_y(Alignment::Center),
+        text(format::time_left(info.expire, locale))
             .font(moonlight_design::display())
             .size(scale::PLAN)
             .color(palette.text),
-        progress_bar(0.0..=1.0, 0.0).girth(6.0),
     ]
     .spacing(6);
+
+    // The bar is only drawn for a plan that has a quota. An unlimited plan with
+    // an empty bar under it reads as "nothing used of nothing".
+    if let Some(fraction) = info.used_fraction() {
+        content = content.push(components::bar(fraction as f32, palette, 6.0));
+    }
+    content = content.push(
+        text(format!(
+            "{} {}",
+            format::quota(info.used(), info.total, locale),
+            t(S::OfTraffic, locale)
+        ))
+        .size(scale::META)
+        .color(palette.text2),
+    );
 
     container(content)
         .padding(14)
         .width(Length::Fill)
-        .style(move |_| iced::widget::container::Style {
-            background: Some(iced::Background::Color(palette.surface)),
-            border: iced::Border {
+        .style(move |_| container::Style {
+            background: Some(Background::Color(palette.surface)),
+            border: Border {
                 radius: iced::border::Radius::from(radii::CARD),
                 width: 1.0,
                 color: palette.hairline,
@@ -188,11 +224,10 @@ mod tests {
 
     #[test]
     fn the_quota_block_is_hidden_on_the_rail() {
-        // 72pt has no room for a plan name and a bar, and half of one reads as
-        // a clipped layout rather than as a deliberate collapse.
         let preferences = Preferences::default();
-        let element = quota(Palette::DARK, AppLocale::Ru, true, &preferences);
+        let info = SubscriptionInfo::default();
+        let element = quota(Palette::DARK, AppLocale::Ru, true, &preferences, &info);
         // A zero-height spacer is what "nothing here" looks like in iced.
-        assert_eq!(element.as_widget().size().height, iced::Length::Fixed(0.0));
+        assert_eq!(element.as_widget().size().height, Length::Fixed(0.0));
     }
 }

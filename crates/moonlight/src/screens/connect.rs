@@ -1,56 +1,47 @@
 //! The connect screen: the dial on the left, the server list on the right.
 
 use iced::widget::{button, canvas, column, container, row, text};
-use iced::{Alignment, Element, Length};
+use iced::{Alignment, Border, Element, Length};
 
-use moonlight_core::preferences::Preferences;
 use moonlight_core::{format, AppLocale, ConnectionState, Node};
+use moonlight_design::motion::radii;
 use moonlight_design::typography::{scale, EMPHATIC};
-use moonlight_design::{icon, Icon, Palette};
+use moonlight_design::{icon, Icon};
 
+use crate::components;
 use crate::dial::Dial;
 use crate::localization::{t, S};
-use crate::{hspace, theme, vspace, Message};
+use crate::{hspace, theme, vspace, Message, Moonlight};
 
 /// The dial's drawn size, from the design.
 const DIAL: f32 = 300.0;
 
-pub fn view<'a>(
-    palette: Palette,
-    locale: AppLocale,
-    state: &ConnectionState,
-    progress: f32,
-    uptime_seconds: i64,
-    preferences: &'a Preferences,
-) -> Element<'a, Message> {
+pub fn view(app: &Moonlight) -> Element<'_, Message> {
     row![
-        container(dial_column(
-            palette,
-            locale,
-            state,
-            progress,
-            uptime_seconds
-        ))
-        .padding(28)
-        .width(Length::FillPortion(3))
-        .style(move |_| theme::panel(palette)),
-        container(server_column(palette, locale, preferences))
+        container(dial_column(app))
+            .padding(28)
+            .width(Length::FillPortion(3))
+            .style({
+                let palette = app.palette_of();
+                move |_| theme::panel(palette)
+            }),
+        container(server_column(app))
             .padding(22)
             .width(Length::FillPortion(2))
-            .style(move |_| theme::panel(palette)),
+            .style({
+                let palette = app.palette_of();
+                move |_| theme::panel(palette)
+            }),
     ]
     .spacing(20)
-    .height(Length::Fixed(660.0))
     .into()
 }
 
-fn dial_column<'a>(
-    palette: Palette,
-    locale: AppLocale,
-    state: &ConnectionState,
-    progress: f32,
-    uptime_seconds: i64,
-) -> Element<'a, Message> {
+fn dial_column(app: &Moonlight) -> Element<'_, Message> {
+    let palette = app.palette_of();
+    let locale = app.locale_of();
+    let state = app.state();
+
     let (label, ink) = match state {
         ConnectionState::Connected => (S::StateConnected, palette.status_secure),
         ConnectionState::Connecting => (S::Connecting, palette.text2),
@@ -66,16 +57,14 @@ fn dial_column<'a>(
         _ => S::Connect,
     };
 
-    // The ring is drawn behind the label stack rather than around it, so the
-    // whole disc is one press target.
     let face = column![
         row![
             // The status dot is the accent-line role — a thin mark, not a fill.
-            container(hspace(Length::Fixed(6.0)))
-                .height(Length::Fixed(6.0))
+            container(vspace(Length::Fixed(6.0)))
+                .width(Length::Fixed(6.0))
                 .style(move |_| container::Style {
                     background: Some(iced::Background::Color(ink)),
-                    border: iced::Border {
+                    border: Border {
                         radius: iced::border::Radius::from(3.0),
                         ..Default::default()
                     },
@@ -92,7 +81,7 @@ fn dial_column<'a>(
             .font(moonlight_design::display())
             .size(scale::HERO)
             .color(palette.text),
-        text(format::duration(uptime_seconds))
+        text(format::duration(app.uptime()))
             .font(moonlight_design::mono())
             .size(scale::BODY)
             .color(palette.text_muted),
@@ -100,7 +89,7 @@ fn dial_column<'a>(
     .spacing(6)
     .align_x(Alignment::Center);
 
-    let ring = canvas(Dial::new(state.clone(), palette, progress))
+    let ring = canvas(Dial::new(state.clone(), palette, app.progress()))
         .width(Length::Fixed(DIAL))
         .height(Length::Fixed(DIAL));
 
@@ -113,8 +102,9 @@ fn dial_column<'a>(
             .center_y(Length::Fixed(DIAL)),
     ];
 
+    let can_press = !state.is_busy() && app.preferences().subscription_url.is_some();
     let press = button(disc)
-        .on_press_maybe((!state.is_busy()).then_some(Message::ToggleConnection))
+        .on_press_maybe(can_press.then_some(Message::ToggleConnection))
         .padding(0)
         .style(move |_, status| {
             let mut style = theme::row_button(palette, false, status);
@@ -122,15 +112,30 @@ fn dial_column<'a>(
             style
         });
 
+    let hint: Element<'_, Message> = match app.last_error() {
+        // A failure replaces the hint rather than sitting beside it: the hint
+        // says "press to connect", which is exactly what has just not worked.
+        Some(error) => text(error.to_string())
+            .size(scale::META)
+            .color(palette.danger)
+            .into(),
+        None if app.preferences().subscription_url.is_none() => text(t(S::NoSubscription, locale))
+            .size(scale::META)
+            .color(palette.text_muted)
+            .into(),
+        None => text(t(S::PressToConnect, locale))
+            .size(scale::META)
+            .color(palette.text_muted)
+            .into(),
+    };
+
     column![
-        vspace(Length::Fixed(24.0)),
+        vspace(Length::Fixed(18.0)),
         press,
         vspace(Length::Fixed(14.0)),
-        text(t(S::PressToConnect, locale))
-            .size(scale::META)
-            .color(palette.text_muted),
+        hint,
         vspace(Length::Fixed(22.0)),
-        stats(palette, locale),
+        stats(app),
     ]
     .align_x(Alignment::Center)
     .width(Length::Fill)
@@ -141,7 +146,12 @@ fn dial_column<'a>(
 /// rather than what the session has spent. Session byte counters are the least
 /// actionable numbers on the screen; how much plan remains is what people open
 /// the app to check.
-fn stats<'a>(palette: Palette, locale: AppLocale) -> Element<'a, Message> {
+fn stats(app: &Moonlight) -> Element<'_, Message> {
+    let palette = app.palette_of();
+    let locale = app.locale_of();
+    let info = app.info();
+    let (up, down) = app.session();
+
     let cell = |label: S, value: String| {
         column![
             text(t(label, locale))
@@ -156,13 +166,27 @@ fn stats<'a>(palette: Palette, locale: AppLocale) -> Element<'a, Message> {
         .align_x(Alignment::Center)
     };
 
+    // Session bytes only while there is a session; a "0 B" pair on a
+    // disconnected screen is two numbers that mean nothing.
+    let connected = app.state().is_connected();
+    let downloaded = if connected {
+        format::bytes(Some(down), locale)
+    } else {
+        format::bytes(None, locale)
+    };
+    let uploaded = if connected {
+        format::bytes(Some(up), locale)
+    } else {
+        format::bytes(None, locale)
+    };
+
     container(
         row![
-            cell(S::Downloaded, format::bytes(None, locale)),
-            divider(palette),
-            cell(S::Uploaded, format::bytes(None, locale)),
-            divider(palette),
-            cell(S::Remaining, format::days(None, locale)),
+            cell(S::Downloaded, downloaded),
+            divider(app),
+            cell(S::Uploaded, uploaded),
+            divider(app),
+            cell(S::Remaining, format::time_left(info.expire, locale)),
         ]
         .spacing(22)
         .align_y(Alignment::Center),
@@ -172,7 +196,8 @@ fn stats<'a>(palette: Palette, locale: AppLocale) -> Element<'a, Message> {
     .into()
 }
 
-fn divider<'a>(palette: Palette) -> Element<'a, Message> {
+fn divider(app: &Moonlight) -> Element<'_, Message> {
+    let palette = app.palette_of();
     container(hspace(Length::Fixed(1.0)))
         .height(Length::Fixed(34.0))
         .style(move |_| container::Style {
@@ -182,54 +207,67 @@ fn divider<'a>(palette: Palette) -> Element<'a, Message> {
         .into()
 }
 
-fn server_column<'a>(
-    palette: Palette,
-    locale: AppLocale,
-    preferences: &'a Preferences,
-) -> Element<'a, Message> {
+fn server_column(app: &Moonlight) -> Element<'_, Message> {
+    let palette = app.palette_of();
+    let locale = app.locale_of();
+    let nodes = app.nodes();
+
     let heading = row![
-        text(t(S::Servers, locale))
-            .size(scale::MICRO)
-            .font(moonlight_design::ui(EMPHATIC))
-            .color(palette.text_muted),
+        components::overline(t(S::Servers, locale), palette),
         hspace(Length::Fill),
-        text(format!("0 {}", t(S::Nodes, locale)))
+        text(format!("{} {}", nodes.len(), t(S::Nodes, locale)))
             .size(scale::META)
             .color(palette.text_muted),
     ]
     .align_y(Alignment::Center);
 
-    column![
+    let mut list = column![
         heading,
         vspace(Length::Fixed(14.0)),
-        auto_row(palette, locale, preferences.auto_select),
+        auto_row(app),
         vspace(Length::Fixed(8.0)),
-        container(vspace(Length::Fixed(1.0)))
-            .width(Length::Fill)
-            .style(move |_| container::Style {
-                background: Some(iced::Background::Color(palette.hairline)),
-                ..Default::default()
-            }),
+        components::divider(palette),
         vspace(Length::Fixed(8.0)),
-        text(match locale {
-            AppLocale::Ru => "Импортируйте подписку, чтобы увидеть узлы",
-            AppLocale::En => "Import a subscription to see nodes",
-        })
-        .size(scale::BODY_SM)
-        .color(palette.text_muted),
-    ]
-    .width(Length::Fill)
-    .into()
+    ];
+
+    if nodes.is_empty() {
+        let message = if app.preferences().subscription_url.is_none() {
+            match locale {
+                AppLocale::Ru => "Импортируйте подписку, чтобы увидеть узлы",
+                AppLocale::En => "Import a subscription to see nodes",
+            }
+        } else {
+            match locale {
+                AppLocale::Ru => "Узлы загружаются…",
+                AppLocale::En => "Loading nodes…",
+            }
+        };
+        list = list.push(components::empty_state(message, palette));
+    } else {
+        for node in nodes {
+            // A panel that already offers a url-test picker makes the app's own
+            // Авто row redundant, so only one of the two is shown.
+            if node.is_auto_picker() {
+                continue;
+            }
+            let selected = app.preferences().selected_node.as_deref() == Some(node.name.as_str());
+            list = list.push(node_row(app, node, selected));
+        }
+    }
+
+    list.width(Length::Fill).into()
 }
 
-/// "Авто" is the app's own latency picker. When a panel already offers a
-/// `url-test` group there is no reason to show both — see
-/// [`moonlight_core::Node::is_auto_picker`].
-fn auto_row<'a>(palette: Palette, locale: AppLocale, selected: bool) -> Element<'a, Message> {
+/// "Авто" is the app's own latency picker.
+fn auto_row(app: &Moonlight) -> Element<'_, Message> {
+    let palette = app.palette_of();
+    let locale = app.locale_of();
+    let selected = app.preferences().auto_select;
+
     // The tile's wash and the row's selection wash are the same 13% lime, and
     // stacking them turns the square olive. On a selected row the tile sits on
     // a plain surface instead, so the bolt stays the only accent in the group.
-    let tile = if selected {
+    let tile_fill = if selected {
         palette.surface2
     } else {
         palette.accent_quiet
@@ -239,9 +277,9 @@ fn auto_row<'a>(palette: Palette, locale: AppLocale, selected: bool) -> Element<
         container(icon(Icon::Zap, 18.0, palette.accent_ink))
             .padding(9)
             .style(move |_| container::Style {
-                background: Some(iced::Background::Color(tile)),
-                border: iced::Border {
-                    radius: iced::border::Radius::from(moonlight_design::motion::radii::TILE),
+                background: Some(iced::Background::Color(tile_fill)),
+                border: Border {
+                    radius: iced::border::Radius::from(radii::TILE),
                     ..Default::default()
                 },
                 ..Default::default()
@@ -268,31 +306,32 @@ fn auto_row<'a>(palette: Palette, locale: AppLocale, selected: bool) -> Element<
         .into()
 }
 
-/// A node row. Kept here rather than inlined so the server list has one shape
-/// whether it is drawn from the API or from a cached subscription.
-// Unused until the tunnel controller supplies nodes; written now because the
-// row's shape is what the server list is built around.
-#[allow(dead_code)]
-pub fn node_row<'a>(
-    palette: Palette,
-    locale: AppLocale,
-    node: &'a Node,
-    selected: bool,
-) -> Element<'a, Message> {
+fn node_row<'a>(app: &'a Moonlight, node: &'a Node, selected: bool) -> Element<'a, Message> {
+    let palette = app.palette_of();
+    let locale = app.locale_of();
+
     let flag: Element<'a, Message> = match node.flag() {
         Some(flag) => text(flag).size(scale::LEAD).into(),
-        // A cross-country balancer or an auto-picker has no flag, and inventing
-        // one would be a lie about where the traffic goes.
+        // A cross-country balancer has no flag, and inventing one would be a lie
+        // about where the traffic goes.
         None => icon(Icon::Globe, 18.0, palette.text_muted),
     };
 
-    let latency = match node.latency {
-        Some(ms) => text(format::latency(Some(ms)))
-            .size(scale::META)
-            .color(palette.ping_color(ms)),
-        None => text(format::latency(None))
-            .size(scale::META)
-            .color(palette.text_muted),
+    // A node still being measured shows a spinner rather than its old number,
+    // so a stale figure is never mistaken for a fresh one.
+    let latency: Element<'a, Message> = if app.is_probing(&node.name) {
+        icon(Icon::LoaderCircle, 14.0, palette.text_muted)
+    } else {
+        match node.latency {
+            Some(ms) => text(format::latency(Some(ms)))
+                .size(scale::META)
+                .color(palette.ping_color(ms))
+                .into(),
+            None => text(format::latency(None))
+                .size(scale::META)
+                .color(palette.text_muted)
+                .into(),
+        }
     };
 
     let content = row![

@@ -107,6 +107,14 @@ impl Kind {
     }
 }
 
+/// The rule grammar's own token is what the design shows in the picker and on
+/// each rule row, so it is the display form too.
+impl fmt::Display for Kind {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.token())
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct SplitRule {
     pub id: Uuid,
@@ -241,6 +249,13 @@ pub fn validate(kind: Kind, value: &str) -> Option<Invalid> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_kind_displays_as_its_grammar_token() {
+        // The picker shows this, and so does every rule row.
+        assert_eq!(Kind::ProcessName.to_string(), "PROCESS-NAME");
+        assert_eq!(Kind::IpCidr.to_string(), "IP-CIDR");
+    }
 
     #[test]
     fn a_rule_writes_mihomos_grammar() {
