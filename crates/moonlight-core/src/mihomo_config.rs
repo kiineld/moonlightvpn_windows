@@ -130,7 +130,12 @@ pub fn build(panel_yaml: &str, overrides: &Overrides) -> Result<String, Failure>
     if groups.is_empty() {
         let names: Vec<String> = proxies
             .iter()
-            .filter_map(|p| p.as_mapping()?.get(key("name"))?.as_str().map(str::to_string))
+            .filter_map(|p| {
+                p.as_mapping()?
+                    .get(key("name"))?
+                    .as_str()
+                    .map(str::to_string)
+            })
             .collect();
         groups = default_groups(&names);
         root.insert(key("proxy-groups"), Value::Sequence(groups.clone()));
@@ -240,7 +245,10 @@ pub fn primary_selector_name(groups: &[Value], rules: &[String]) -> String {
         .find(|r| r.to_uppercase().starts_with("MATCH,"))
         .map(|r| r["MATCH,".len()..].trim().to_string())
     {
-        if groups.iter().any(|g| group_name(g).as_deref() == Some(&target)) {
+        if groups
+            .iter()
+            .any(|g| group_name(g).as_deref() == Some(&target))
+        {
             return target;
         }
     }
@@ -437,7 +445,10 @@ rules:
             root.get(key("external-controller")).and_then(Value::as_str),
             Some("127.0.0.1:9797")
         );
-        assert_eq!(root.get(key("secret")).and_then(Value::as_str), Some("s3cret"));
+        assert_eq!(
+            root.get(key("secret")).and_then(Value::as_str),
+            Some("s3cret")
+        );
         assert_eq!(
             root.get(key("mixed-port")).and_then(Value::as_i64),
             Some(7897)
@@ -448,7 +459,10 @@ rules:
     fn the_listener_is_never_open_to_the_network() {
         let built = build(PANEL, &overrides()).expect("builds");
         let root = parse(&built);
-        assert_eq!(root.get(key("allow-lan")).and_then(Value::as_bool), Some(false));
+        assert_eq!(
+            root.get(key("allow-lan")).and_then(Value::as_bool),
+            Some(false)
+        );
         assert_eq!(
             root.get(key("bind-address")).and_then(Value::as_str),
             Some("127.0.0.1")
@@ -664,7 +678,10 @@ rules:
         let built = build(PANEL, &o).expect("builds");
         let root = parse(&built);
 
-        let tun = root.get(key("tun")).and_then(Value::as_mapping).expect("tun");
+        let tun = root
+            .get(key("tun"))
+            .and_then(Value::as_mapping)
+            .expect("tun");
         assert_eq!(tun.get(key("enable")).and_then(Value::as_bool), Some(true));
         assert_eq!(tun.get(key("stack")).and_then(Value::as_str), Some("mixed"));
         assert!(
@@ -672,7 +689,10 @@ rules:
             "naming the adapter collides with whatever already holds it"
         );
 
-        let dns = root.get(key("dns")).and_then(Value::as_mapping).expect("dns");
+        let dns = root
+            .get(key("dns"))
+            .and_then(Value::as_mapping)
+            .expect("dns");
         assert_eq!(dns.get(key("enable")).and_then(Value::as_bool), Some(true));
     }
 
@@ -690,7 +710,10 @@ rules:
         o.mode = TunnelMode::Tun;
         let built = build(&panel, &o).expect("builds");
         let root = parse(&built);
-        let dns = root.get(key("dns")).and_then(Value::as_mapping).expect("dns");
+        let dns = root
+            .get(key("dns"))
+            .and_then(Value::as_mapping)
+            .expect("dns");
 
         assert_eq!(dns.get(key("ipv6")).and_then(Value::as_bool), Some(true));
         let ns = dns

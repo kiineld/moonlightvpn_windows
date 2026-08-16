@@ -85,11 +85,7 @@ impl Core {
         let path = write_config(config).map_err(|e| format!("Could not write the config: {e}"))?;
 
         let mut command = Command::new(&binary);
-        command
-            .arg("-d")
-            .arg(data_directory())
-            .arg("-f")
-            .arg(&path);
+        command.arg("-d").arg(data_directory()).arg("-f").arg(&path);
 
         #[cfg(windows)]
         {

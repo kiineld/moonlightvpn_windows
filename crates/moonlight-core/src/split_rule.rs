@@ -365,7 +365,10 @@ mod tests {
         assert_eq!(validate(Kind::IpCidr, "2001:db8::/32"), None);
         assert_eq!(validate(Kind::IpCidr, "0.0.0.0/0"), None);
 
-        assert_eq!(validate(Kind::IpCidr, "192.168.1.0"), Some(Invalid::BadCidr));
+        assert_eq!(
+            validate(Kind::IpCidr, "192.168.1.0"),
+            Some(Invalid::BadCidr)
+        );
         assert_eq!(
             validate(Kind::IpCidr, "999.1.1.1/24"),
             Some(Invalid::BadCidr),
@@ -380,7 +383,10 @@ mod tests {
         // /64 is valid for v6 and nonsense for v4; one range check for both
         // would let the v4 case through.
         assert_eq!(validate(Kind::IpCidr, "2001:db8::/64"), None);
-        assert_eq!(validate(Kind::IpCidr, "10.0.0.0/64"), Some(Invalid::BadCidr));
+        assert_eq!(
+            validate(Kind::IpCidr, "10.0.0.0/64"),
+            Some(Invalid::BadCidr)
+        );
         assert_eq!(validate(Kind::IpCidr, "10.0.0.0/32"), None);
     }
 

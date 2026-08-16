@@ -157,7 +157,8 @@ mod client {
     pub fn is_installed() -> bool {
         use windows::core::HSTRING;
         use windows::Win32::System::Services::{
-            CloseServiceHandle, OpenSCManagerW, OpenServiceW, SC_MANAGER_CONNECT, SERVICE_QUERY_STATUS,
+            CloseServiceHandle, OpenSCManagerW, OpenServiceW, SC_MANAGER_CONNECT,
+            SERVICE_QUERY_STATUS,
         };
 
         unsafe {

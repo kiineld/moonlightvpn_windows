@@ -307,8 +307,7 @@ impl Scanner {
         }
 
         let sign = if large_arc == sweep { -1.0 } else { 1.0 };
-        let numerator =
-            (rx * rx * ry * ry - rx * rx * y1 * y1 - ry * ry * x1 * x1).max(0.0);
+        let numerator = (rx * rx * ry * ry - rx * rx * y1 * y1 - ry * ry * x1 * x1).max(0.0);
         let denominator = rx * rx * y1 * y1 + ry * ry * x1 * x1;
         let coef = if denominator == 0.0 {
             0.0

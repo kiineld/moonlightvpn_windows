@@ -12,9 +12,7 @@ use windows_service::service::{
 use windows_service::service_control_handler::{self, ServiceControlHandlerResult};
 use windows_service::service_manager::{ServiceManager, ServiceManagerAccess};
 
-use moonlight_core::helper::{
-    validate, Request, Response, SERVICE_DISPLAY_NAME, SERVICE_NAME,
-};
+use moonlight_core::helper::{validate, Request, Response, SERVICE_DISPLAY_NAME, SERVICE_NAME};
 
 use crate::core_runner::Core;
 use crate::pipe;
@@ -80,7 +78,8 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     // routes and the controller port.
     core.lock().expect("core mutex").stop();
 
-    status_handle.set_service_status(report(ServiceState::Stopped, ServiceControlAccept::empty()))?;
+    status_handle
+        .set_service_status(report(ServiceState::Stopped, ServiceControlAccept::empty()))?;
     Ok(())
 }
 
@@ -140,7 +139,8 @@ pub fn install() -> Result<(), Box<dyn std::error::Error>> {
         account_password: None,
     };
 
-    let service = manager.create_service(&info, ServiceAccess::CHANGE_CONFIG | ServiceAccess::START)?;
+    let service =
+        manager.create_service(&info, ServiceAccess::CHANGE_CONFIG | ServiceAccess::START)?;
     service.set_description(
         "Runs the Moonlight VPN core in TUN mode. Removing this service disables \
          TUN mode; system-proxy mode keeps working without it.",
@@ -150,8 +150,7 @@ pub fn install() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 pub fn uninstall() -> Result<(), Box<dyn std::error::Error>> {
-    let manager =
-        ServiceManager::local_computer(None::<&str>, ServiceManagerAccess::CONNECT)?;
+    let manager = ServiceManager::local_computer(None::<&str>, ServiceManagerAccess::CONNECT)?;
     let service = manager.open_service(
         SERVICE_NAME,
         ServiceAccess::STOP | ServiceAccess::DELETE | ServiceAccess::QUERY_STATUS,

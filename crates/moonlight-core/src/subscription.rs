@@ -147,8 +147,9 @@ impl SubscriptionClient {
                             source,
                         });
                     }
-                    last_error =
-                        Failure::Unusable(format!("{suffix} endpoint did not return a Clash config"));
+                    last_error = Failure::Unusable(format!(
+                        "{suffix} endpoint did not return a Clash config"
+                    ));
                 }
                 Err(error) => last_error = error,
             }
@@ -290,8 +291,11 @@ pub fn normalize(raw: &str) -> Option<String> {
 /// Detected by content, not by `Content-Type` — panels mislabel it, and a
 /// base64 body served as `text/yaml` would otherwise be fed to the parser.
 pub fn looks_like_clash_config(body: &str) -> bool {
-    body.lines()
-        .any(|line| Regex::new(r"^\s*proxies\s*:").expect("static pattern").is_match(line))
+    body.lines().any(|line| {
+        Regex::new(r"^\s*proxies\s*:")
+            .expect("static pattern")
+            .is_match(line)
+    })
 }
 
 /// Parses the two headers every panel implements consistently.

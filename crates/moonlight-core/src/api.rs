@@ -367,10 +367,13 @@ impl MihomoApi {
                 buffer.extend_from_slice(&chunk);
                 while let Some(newline) = buffer.iter().position(|b| *b == b'\n') {
                     let line: Vec<u8> = buffer.drain(..=newline).collect();
-                    let Ok(object) = serde_json::from_slice::<Value>(&line[..line.len() - 1]) else {
+                    let Ok(object) = serde_json::from_slice::<Value>(&line[..line.len() - 1])
+                    else {
                         continue;
                     };
-                    let Some(value) = decode(&object) else { continue };
+                    let Some(value) = decode(&object) else {
+                        continue;
+                    };
                     if tx.send(value).is_err() {
                         return; // the caller dropped the receiver
                     }
@@ -400,12 +403,8 @@ impl MihomoApi {
     }
 
     pub async fn close_connection(&self, id: &str) -> Result<(), Failure> {
-        self.request(
-            reqwest::Method::DELETE,
-            &format!("/connections/{id}"),
-            None,
-        )
-        .await?;
+        self.request(reqwest::Method::DELETE, &format!("/connections/{id}"), None)
+            .await?;
         Ok(())
     }
 
@@ -413,7 +412,10 @@ impl MihomoApi {
     pub async fn totals(&self) -> Result<Traffic, Failure> {
         let object = self.get("/connections").await?;
         Ok(Traffic {
-            up: object.get("uploadTotal").and_then(Value::as_i64).unwrap_or(0),
+            up: object
+                .get("uploadTotal")
+                .and_then(Value::as_i64)
+                .unwrap_or(0),
             down: object
                 .get("downloadTotal")
                 .and_then(Value::as_i64)

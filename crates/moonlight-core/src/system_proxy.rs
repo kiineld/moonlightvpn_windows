@@ -74,8 +74,7 @@ mod imp {
         HKEY_CURRENT_USER, KEY_READ, KEY_WRITE, REG_DWORD, REG_SZ, REG_VALUE_TYPE,
     };
 
-    const SETTINGS_PATH: &str =
-        r"Software\Microsoft\Windows\CurrentVersion\Internet Settings";
+    const SETTINGS_PATH: &str = r"Software\Microsoft\Windows\CurrentVersion\Internet Settings";
 
     fn wide(text: &str) -> Vec<u16> {
         text.encode_utf16().chain(std::iter::once(0)).collect()
@@ -85,7 +84,11 @@ mod imp {
 
     impl Key {
         fn open(write: bool) -> Option<Key> {
-            let access = if write { KEY_READ | KEY_WRITE } else { KEY_READ };
+            let access = if write {
+                KEY_READ | KEY_WRITE
+            } else {
+                KEY_READ
+            };
             let mut handle = HKEY::default();
             let path = wide(SETTINGS_PATH);
             let status = unsafe {
@@ -162,12 +165,10 @@ mod imp {
         fn set_string(&self, name: &str, value: &str) -> bool {
             let name = wide(name);
             let data = wide(value);
-            let bytes = unsafe {
-                std::slice::from_raw_parts(data.as_ptr() as *const u8, data.len() * 2)
-            };
-            let status = unsafe {
-                RegSetValueExW(self.0, PCWSTR(name.as_ptr()), None, REG_SZ, Some(bytes))
-            };
+            let bytes =
+                unsafe { std::slice::from_raw_parts(data.as_ptr() as *const u8, data.len() * 2) };
+            let status =
+                unsafe { RegSetValueExW(self.0, PCWSTR(name.as_ptr()), None, REG_SZ, Some(bytes)) };
             status == ERROR_SUCCESS
         }
 

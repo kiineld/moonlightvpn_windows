@@ -176,7 +176,11 @@ fn vmess(link: &str) -> Option<Mapping> {
     put(&mut proxy, "server", host.clone());
     put(&mut proxy, "port", port);
     put(&mut proxy, "uuid", uuid);
-    put(&mut proxy, "alterId", json_int(object.get("aid")).unwrap_or(0));
+    put(
+        &mut proxy,
+        "alterId",
+        json_int(object.get("aid")).unwrap_or(0),
+    );
     put(
         &mut proxy,
         "cipher",
@@ -406,10 +410,7 @@ impl UriParts {
         let (host_part, port_part) = if authority.starts_with('[') {
             let close = authority.find(']')?;
             let after = &authority[close + 1..];
-            (
-                &authority[1..close],
-                after.strip_prefix(':'),
-            )
+            (&authority[1..close], after.strip_prefix(':'))
         } else if let Some(colon) = authority.rfind(':') {
             (&authority[..colon], Some(&authority[colon + 1..]))
         } else {
@@ -492,8 +493,9 @@ mod tests {
 
     #[test]
     fn the_fragment_is_the_node_name_even_with_emoji_and_spaces() {
-        let parts = UriParts::parse("vless://uuid@1.2.3.4:443#%F0%9F%87%B8%F0%9F%87%AA%20Stockholm")
-            .expect("parses");
+        let parts =
+            UriParts::parse("vless://uuid@1.2.3.4:443#%F0%9F%87%B8%F0%9F%87%AA%20Stockholm")
+                .expect("parses");
         assert_eq!(parts.name, "🇸🇪 Stockholm");
     }
 
@@ -629,7 +631,10 @@ mod tests {
         assert_eq!(s(&proxy, "type").as_deref(), Some("vmess"));
         assert_eq!(s(&proxy, "name").as_deref(), Some("Node A"));
         assert_eq!(s(&proxy, "server").as_deref(), Some("1.2.3.4"));
-        assert_eq!(proxy.get(Value::from("port")).and_then(Value::as_i64), Some(443));
+        assert_eq!(
+            proxy.get(Value::from("port")).and_then(Value::as_i64),
+            Some(443)
+        );
         assert_eq!(s(&proxy, "network").as_deref(), Some("ws"));
     }
 
@@ -639,7 +644,10 @@ mod tests {
             let json = format!(r#"{{"add":"h","id":"u","port":{port}}}"#);
             let link = format!("vmess://{}", STANDARD.encode(&json));
             let proxy = mihomo_proxy(&link).expect("parses");
-            assert_eq!(proxy.get(Value::from("port")).and_then(Value::as_i64), Some(443));
+            assert_eq!(
+                proxy.get(Value::from("port")).and_then(Value::as_i64),
+                Some(443)
+            );
         }
     }
 
@@ -672,10 +680,7 @@ mod tests {
         assert_eq!(s(&plain, "cipher").as_deref(), Some("aes-256-gcm"));
         assert_eq!(s(&plain, "password").as_deref(), Some("pass"));
 
-        let encoded = format!(
-            "ss://{}@h:8388#N",
-            STANDARD.encode("aes-256-gcm:pass")
-        );
+        let encoded = format!("ss://{}@h:8388#N", STANDARD.encode("aes-256-gcm:pass"));
         let decoded = mihomo_proxy(&encoded).expect("base64 parses");
         assert_eq!(s(&decoded, "cipher").as_deref(), Some("aes-256-gcm"));
         assert_eq!(s(&decoded, "password").as_deref(), Some("pass"));
@@ -694,10 +699,11 @@ mod tests {
 
     #[test]
     fn allow_insecure_becomes_skip_cert_verify() {
-        let proxy =
-            mihomo_proxy("trojan://p@h:443?allowInsecure=1#N").expect("parses");
+        let proxy = mihomo_proxy("trojan://p@h:443?allowInsecure=1#N").expect("parses");
         assert_eq!(
-            proxy.get(Value::from("skip-cert-verify")).and_then(Value::as_bool),
+            proxy
+                .get(Value::from("skip-cert-verify"))
+                .and_then(Value::as_bool),
             Some(true)
         );
     }

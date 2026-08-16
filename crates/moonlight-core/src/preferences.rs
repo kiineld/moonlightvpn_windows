@@ -246,9 +246,11 @@ mod tests {
 
     #[test]
     fn preferences_round_trip() {
-        let mut prefs = Preferences::default();
-        prefs.subscription_url = Some("https://panel/sub".into());
-        prefs.split_rules.push(SplitRule::new(Kind::Domain, "x.com"));
+        let mut prefs = Preferences {
+            subscription_url: Some("https://panel/sub".into()),
+            split_rules: vec![SplitRule::new(Kind::Domain, "x.com")],
+            ..Default::default()
+        };
         prefs.record_latency("Node A", Some(37));
 
         let json = serde_json::to_string(&prefs).expect("serialises");
@@ -317,13 +319,15 @@ mod tests {
 
     #[test]
     fn a_proxy_snapshot_survives_a_round_trip_so_a_crash_cannot_strand_it() {
-        let mut prefs = Preferences::default();
-        prefs.proxy_snapshot = Some(Snapshot {
-            enabled: true,
-            server: "corp:8080".into(),
-            bypass: "<local>".into(),
-            auto_config_url: None,
-        });
+        let prefs = Preferences {
+            proxy_snapshot: Some(Snapshot {
+                enabled: true,
+                server: "corp:8080".into(),
+                bypass: "<local>".into(),
+                auto_config_url: None,
+            }),
+            ..Default::default()
+        };
         let json = serde_json::to_string(&prefs).unwrap();
         let back: Preferences = serde_json::from_str(&json).unwrap();
         assert_eq!(back.proxy_snapshot, prefs.proxy_snapshot);

@@ -34,14 +34,9 @@ pub fn bytes(value: Option<i64>, locale: AppLocale) -> String {
         amount /= 1024.0;
         index += 1;
     }
-    // Bytes and kilobytes have no meaningful fraction.
-    let digits = if index <= 1 {
-        0
-    } else if amount.abs() >= 100.0 {
-        0
-    } else {
-        1
-    };
+    // Bytes and kilobytes have no meaningful fraction, and neither does a
+    // three-figure amount — "150 GB" has to stay on one line beside "of".
+    let digits = usize::from(index > 1 && amount.abs() < 100.0);
     format!("{}{NBSP}{}", decimal(amount, digits, locale), units[index])
 }
 
@@ -160,13 +155,20 @@ pub fn quota(used: Option<i64>, total: Option<i64>, locale: AppLocale) -> String
 pub fn age(seconds_ago: i64, locale: AppLocale) -> String {
     let seconds = seconds_ago.max(0);
     if seconds < 60 {
-        return format!("{seconds} {}", if locale == AppLocale::Ru { "с" } else { "s" });
+        return format!(
+            "{seconds} {}",
+            if locale == AppLocale::Ru { "с" } else { "s" }
+        );
     }
     if seconds < 3600 {
         return format!(
             "{} {}",
             seconds / 60,
-            if locale == AppLocale::Ru { "мин" } else { "m" }
+            if locale == AppLocale::Ru {
+                "мин"
+            } else {
+                "m"
+            }
         );
     }
     format!(

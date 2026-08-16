@@ -1,0 +1,39 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python -m pip install fonttools
+
+      - name: Build
+        run: .\scripts\build.ps1
+        env:
+          TELEGRAM_BOT_URL: ${{ vars.TELEGRAM_BOT_URL }}
+          TELEGRAM_CHANNEL_URL: ${{ vars.TELEGRAM_CHANNEL_URL }}
+          SUPPORT_URL: ${{ vars.SUPPORT_URL }}
+          RELEASES_URL: ${{ vars.RELEASES_URL }}
+
+      # The filename carries no version, so the latest-release URL keeps working
+      # across releases — the version is in the release title and in the binary.
+      - name: Package
+        run: Compress-Archive -Path dist\Moonlight\* -DestinationPath Moonlight-x86_64.zip
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: Moonlight-x86_64.zip
+          generate_release_notes: true

@@ -163,8 +163,7 @@ impl MihomoProcess {
     pub fn tun_failure(log: &str) -> Option<String> {
         let line = log
             .lines()
-            .filter(|l| l.contains("Start TUN listening error"))
-            .next_back()?;
+            .rfind(|l| l.contains("Start TUN listening error"))?;
 
         // `add route: …: file exists` means another VPN client already owns the
         // routes auto-route wants. That is the common case by far, and the raw
@@ -204,8 +203,8 @@ mod job {
 
     use windows::Win32::Foundation::HANDLE;
     use windows::Win32::System::JobObjects::{
-        AssignProcessToJobObject, CreateJobObjectW, SetInformationJobObject,
-        JobObjectExtendedLimitInformation, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
+        AssignProcessToJobObject, CreateJobObjectW, JobObjectExtendedLimitInformation,
+        SetInformationJobObject, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
         JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
     };
 
@@ -326,6 +325,8 @@ mod tests {
         }
         assert_eq!(process.log.lock().unwrap().len(), LOG_LIMIT);
         // And it keeps the newest lines, which are the ones that say why.
-        assert!(process.log().ends_with(&format!("line {}", LOG_LIMIT * 3 - 1)));
+        assert!(process
+            .log()
+            .ends_with(&format!("line {}", LOG_LIMIT * 3 - 1)));
     }
 }

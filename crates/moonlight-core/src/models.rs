@@ -92,7 +92,9 @@ impl Node {
         Some(
             chars
                 .into_iter()
-                .map(|c| char::from_u32(c as u32 - REGIONAL_INDICATOR_A + 'A' as u32).unwrap_or('?'))
+                .map(|c| {
+                    char::from_u32(c as u32 - REGIONAL_INDICATOR_A + 'A' as u32).unwrap_or('?')
+                })
                 .collect(),
         )
     }
