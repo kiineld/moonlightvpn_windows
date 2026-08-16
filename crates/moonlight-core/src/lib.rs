@@ -3,6 +3,8 @@
 //! client, and the Windows system-proxy layer.
 
 pub mod api;
+pub mod app_inventory;
+pub mod controller;
 pub mod country;
 pub mod format;
 pub mod helper;
@@ -14,6 +16,7 @@ pub mod share_link;
 pub mod split_rule;
 pub mod subscription;
 pub mod system_proxy;
+pub mod updater;
 
 pub use models::{
     AppEntry, AppLocale, ConnectionState, Node, SplitMode, SubscriptionInfo, TunnelMode,
