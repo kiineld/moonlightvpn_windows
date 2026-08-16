@@ -34,6 +34,7 @@ reqwest = { version = "0.12", default-features = false, features = [
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "process", "io-util", "net", "time", "sync", "fs"] }
 base64 = "0.22"
 url = "2"
+percent-encoding = "2"
 uuid = { version = "1", features = ["v4", "serde"] }
 regex = "1"
 anyhow = "1"
