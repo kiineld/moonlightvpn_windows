@@ -88,6 +88,21 @@ pub fn is_system_executable(executable: &str) -> bool {
     SYSTEM_EXECUTABLES.contains(&lowered.as_str())
 }
 
+/// Whether mihomo could ever match this with a `PROCESS-NAME` rule.
+///
+/// It reads the executable's file name out of the process table, so an entry
+/// without one cannot be matched however the rule is written. The kernel's own
+/// pseudo-processes are the ones that reach here: PID 0 reports as
+/// `[System Process]`, PID 4 as `System`, and the memory compressor as
+/// `Memory Compression` — all bracketed or bare, none of them files.
+///
+/// Found by the integration suite on a real Windows runner, where
+/// `[System Process]` was being offered in the Apps list as something a user
+/// could route.
+pub fn is_matchable(executable: &str) -> bool {
+    !executable.starts_with('[') && executable.to_lowercase().ends_with(".exe")
+}
+
 pub fn is_noise(executable: &str) -> bool {
     let lowered = executable.to_lowercase();
     NOISE_SUBSTRINGS.iter().any(|n| lowered.contains(n))
@@ -140,6 +155,7 @@ pub fn merge(candidates: Vec<Candidate>) -> Vec<AppEntry> {
 
     for candidate in candidates {
         if candidate.executable.is_empty()
+            || !is_matchable(&candidate.executable)
             || is_system_executable(&candidate.executable)
             || is_noise(&candidate.executable)
         {
@@ -494,6 +510,27 @@ mod tests {
             candidate("Chrome", "chrome.exe", false, true),
         ]);
         assert_eq!(merged.len(), 1, "the same program listed twice");
+    }
+
+    #[test]
+    fn a_process_that_is_not_a_file_is_never_offered() {
+        // PID 0 and PID 4 are kernel pseudo-processes with no executable, so a
+        // PROCESS-NAME rule for them could never match however it is written.
+        // The Apps list was offering them until a real Windows runner said so.
+        assert!(!is_matchable("[System Process]"));
+        assert!(!is_matchable("System"));
+        assert!(!is_matchable("Memory Compression"));
+        assert!(!is_matchable("Registry"));
+        assert!(is_matchable("chrome.exe"));
+        assert!(is_matchable("Telegram.exe"));
+
+        let merged = merge(vec![
+            candidate("System Process", "[System Process]", false, true),
+            candidate("System", "System", false, true),
+            candidate("Telegram", "Telegram.exe", true, true),
+        ]);
+        assert_eq!(merged.len(), 1);
+        assert_eq!(merged[0].executable, "Telegram.exe");
     }
 
     #[test]
