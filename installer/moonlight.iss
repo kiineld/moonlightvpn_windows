@@ -72,6 +72,11 @@ Source: "..\dist\Moonlight\mihomo.exe";   DestDir: "{app}"; Flags: ignoreversion
 Source: "..\dist\Moonlight\wintun.dll";   DestDir: "{app}"; Flags: ignoreversion
 Source: "..\dist\Moonlight\LICENSE.md";   DestDir: "{app}"; Flags: ignoreversion
 Source: "..\dist\Moonlight\flags\*.png";  DestDir: "{app}\flags"; Flags: ignoreversion
+; The geo databases. `--install` stages these into %ProgramData% for the TUN
+; core, and the app seeds its own copy from them. Leaving them out of the
+; installer — as the first cut did — gives an install where TUN dies parsing its
+; config while the portable zip works, which is a miserable thing to debug.
+Source: "..\dist\Moonlight\geodata\*";    DestDir: "{app}\geodata"; Flags: ignoreversion
 
 [Icons]
 Name: "{group}\{#AppName}";        Filename: "{app}\{#AppExe}"
