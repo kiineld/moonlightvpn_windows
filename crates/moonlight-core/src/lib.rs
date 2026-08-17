@@ -11,6 +11,7 @@ pub mod country;
 pub mod format;
 pub mod geodata;
 pub mod helper;
+pub mod hwid;
 pub mod mihomo_config;
 pub mod models;
 pub mod preferences;

@@ -105,6 +105,11 @@ pub enum Event {
     Connections(Vec<Connection>),
     Log(LogEntry),
     Error(String),
+    /// Everything that had to be put back has been: the proxy settings are
+    /// restored and the core — this app's or the helper's — is stopped. The UI
+    /// waits for this before closing its window, because closing first races
+    /// the restore and can leave the machine pointed at a dead proxy.
+    ShutdownComplete,
     /// The controller changed something the UI persists and displays.
     PreferencesChanged(Box<Preferences>),
 }
@@ -174,6 +179,8 @@ pub struct Controller {
     /// rather than the core's lifetime totals.
     session_base: Traffic,
     pinging: bool,
+    /// Nodes a probe pass has actually covered this session.
+    probed: std::collections::HashSet<String>,
 }
 
 impl Controller {
@@ -197,6 +204,7 @@ impl Controller {
             connected_at: None,
             session_base: Traffic::default(),
             pinging: false,
+            probed: std::collections::HashSet::new(),
         }
     }
 
@@ -543,13 +551,25 @@ impl Controller {
             if node.latency.is_none() {
                 node.latency = self.preferences.latency(&node.name);
             }
+            // A stored number counts as probed: it came from a real probe, just
+            // an earlier one.
+            node.probed = node.latency.is_some() || self.probed.contains(&node.name);
             node.protocol_label = labels.get(&node.name).cloned();
         }
 
         let live: Vec<String> = nodes.iter().map(|n| n.name.clone()).collect();
         self.preferences.prune_latencies(&live);
         self.save();
+
+        // Nothing measured yet means every row would read as a dash until the
+        // user found the Пинг button. Measuring once, here, is what makes the
+        // list useful the moment a subscription lands — and it is the same pass
+        // the button runs, so it costs nothing extra to have asked.
+        let unmeasured = nodes.iter().any(|n| !n.probed && !n.is_auto_picker());
         self.emit(Event::Nodes(nodes));
+        if unmeasured && !self.pinging {
+            self.ping().await;
+        }
     }
 
     /// "VLESS Reality" rather than "vless", read from the subscription.
@@ -816,7 +836,11 @@ impl Controller {
             }
         });
 
-        let results = self.api.delays(names, PROBE_CONCURRENCY, tx).await;
+        let results = self.api.delays(names.clone(), PROBE_CONCURRENCY, tx).await;
+        // Everything asked has now been asked, answer or not — which is what
+        // lets the UI say `n/a` for a silent node and a dash for one that has
+        // simply not been measured yet.
+        self.probed.extend(names);
         for (node, ms) in &results {
             self.preferences.record_latency(node, Some(*ms));
         }
@@ -898,10 +922,13 @@ impl Controller {
             system_proxy::restore(&snapshot);
             let _ = self.preferences.save();
         }
-        if self.preferences.mode == TunnelMode::Tun {
-            let _ = helper::send(&Request::Stop, Duration::from_secs(10));
-        }
+        // Always, not only in TUN mode. The mode can have been switched while a
+        // helper-run core was still up, and a core left running under the
+        // service keeps capturing traffic after the window is gone — which is
+        // exactly the state people notice as "it did not close the helper".
+        let _ = helper::send(&Request::Stop, Duration::from_secs(10));
         self.core.lock().await.stop().await;
+        self.emit(Event::ShutdownComplete);
     }
 
     fn fail(&mut self, why: String) {

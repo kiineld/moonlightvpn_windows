@@ -35,8 +35,9 @@ use crate::system_proxy::Snapshot;
 #[serde(default, rename_all = "camelCase")]
 pub struct Preferences {
     pub subscription_url: Option<String>,
-    /// A random UUID minted once. Not a hardware identifier — see
-    /// [`crate::subscription::DeviceIdentity`].
+    /// Derived from the machine, so a reinstall is the same device to the panel
+    /// rather than a new one eating another slot off the plan. See
+    /// [`crate::hwid`] for why it is derived rather than the machine's own id.
     pub hwid: String,
     pub selected_node: Option<String>,
     pub auto_select: bool,
@@ -63,7 +64,7 @@ impl Default for Preferences {
     fn default() -> Self {
         Preferences {
             subscription_url: None,
-            hwid: Uuid::new_v4().to_string(),
+            hwid: crate::hwid::stable(),
             selected_node: None,
             auto_select: true,
             mode: TunnelMode::SystemProxy,
@@ -215,18 +216,30 @@ mod tests {
     }
 
     #[test]
-    fn each_install_mints_its_own_identifiers() {
-        // A shared hwid would make the panel count every install as one device.
+    fn the_hwid_survives_a_reinstall_but_the_api_secret_does_not() {
+        // These two want opposite things, and used to be minted the same way.
+        //
+        // The hwid is what the panel counts devices by, so it has to be the same
+        // on this machine tomorrow as it is today — otherwise reinstalling the
+        // app, or wiping preferences.json, spends another slot off the plan
+        // without a second machine ever existing.
+        //
+        // The API secret protects the local core's control port. It is per
+        // process-lifetime and there is nothing to gain by keeping it.
         let a = Preferences::default();
         let b = Preferences::default();
-        assert_ne!(a.hwid, b.hwid);
+        assert_eq!(a.hwid, b.hwid);
         assert_ne!(a.api_secret, b.api_secret);
     }
 
     #[test]
-    fn the_hwid_is_a_uuid_not_anything_from_the_machine() {
+    fn the_hwid_is_a_uuid_and_never_the_machines_own_identifier() {
+        // Derived under this app's namespace rather than copied: sending the
+        // machine's own id would correlate this user with every other program
+        // that reads the same value.
         let prefs = Preferences::default();
         assert!(Uuid::parse_str(&prefs.hwid).is_ok());
+        assert_eq!(prefs.hwid, crate::hwid::stable());
     }
 
     #[test]
