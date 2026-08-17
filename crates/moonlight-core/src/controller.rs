@@ -400,6 +400,20 @@ impl Controller {
     }
 
     async fn spawn_core(&mut self, path: &std::path::Path) {
+        // Before the core, not by it. Every panel config carries GEOSITE and
+        // GEOIP rules, and mihomo resolves those *while parsing* — using its own
+        // half-configured fake-ip resolver, before any tunnel exists. When that
+        // fails the failure is fatal: the process exits without binding its API,
+        // and the only symptom the app can see is "the core did not answer".
+        // Fetching them here uses the OS resolver, which works.
+        let directory = crate::preferences::core_data_directory();
+        if !crate::geodata::present(&directory) {
+            self.narrate("INFO", "Downloading geo databases (one time, ~15 MB)");
+        }
+        if let Err(error) = crate::geodata::ensure(&directory).await {
+            return self.fail(format!("Could not download the geo databases. {error}"));
+        }
+
         let (tx, mut rx) = mpsc::unbounded_channel::<String>();
         {
             let mut core = self.core.lock().await;

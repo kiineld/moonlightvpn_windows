@@ -9,6 +9,7 @@ pub mod autostart;
 pub mod controller;
 pub mod country;
 pub mod format;
+pub mod geodata;
 pub mod helper;
 pub mod mihomo_config;
 pub mod models;
