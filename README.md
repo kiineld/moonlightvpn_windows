@@ -486,6 +486,11 @@ which is fine on a runner that is thrown away and not on a laptop.
 
 An honest list, not a roadmap.
 
+- The installer registers the TUN service itself, but **no one has run it end to
+  end on a clean machine**: it compiles and produces a setup binary, and the
+  service registration it performs is the same `--install` the app has always
+  called, but an install onto a machine that has never had Moonlight on it has
+  not been watched.
 - **The tunnel has still not been run interactively on Windows.** The UI now has
   been: the app has been built and driven on real Windows 11 hardware, and every
   screen that does not need a subscription — Подключение, Приложения, Настройки —
