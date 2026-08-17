@@ -6,9 +6,8 @@ use iced::{Alignment, Element, Length};
 use moonlight_design::typography::{scale, EMPHATIC};
 use moonlight_design::{icon, Icon};
 
-use crate::components;
 use crate::localization::{t, S};
-use crate::{hspace, theme, Message, Moonlight, Page, TELEGRAM_BOT_URL};
+use crate::{hspace, theme, Message, Moonlight, Page};
 
 pub fn view(app: &Moonlight) -> Element<'_, Message> {
     let palette = app.palette_of();
@@ -49,25 +48,16 @@ pub fn view(app: &Moonlight) -> Element<'_, Message> {
     .width(Length::Fill)
     .style(move |_, status| theme::header_button(palette, status));
 
+    // The link field, and pasting one. No "open the bot" row: the macOS client
+    // does not carry one either, and a button that leaves for a browser is a
+    // detour on the one screen whose whole job is to accept a link the user
+    // already has.
     let mut content = column![
         text(t(S::ImportHelp, locale))
             .size(scale::BODY)
             .color(palette.text2),
         field,
         paste,
-        components::surface(
-            components::action_row(
-                Icon::Send,
-                palette.telegram_blue,
-                iced::Color::WHITE,
-                t(S::OpenTelegramBot, locale).to_string(),
-                t(S::BotSendsLink, locale).to_string(),
-                Some(Icon::ChevronRight),
-                Some(Message::OpenUrl(TELEGRAM_BOT_URL)),
-                palette,
-            ),
-            palette
-        ),
     ]
     .spacing(16);
 
