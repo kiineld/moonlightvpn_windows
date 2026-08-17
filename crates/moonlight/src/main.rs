@@ -226,7 +226,9 @@ pub enum Message {
     HelperChanged(bool),
     HelperAttempted(Result<bool, String>),
     CheckForUpdates,
-    UpdateChecked(String),
+    /// The line to show, and whether the app must now exit so the swap script
+    /// can replace it.
+    UpdateChecked((String, bool)),
     OpenUrl(&'static str),
 
     LogFilterLevel(u8),
@@ -238,6 +240,9 @@ pub enum Message {
 
     DragWindow,
     ResizeWindow(iced::window::Direction),
+    /// The window closes on this, once the controller has finished putting the
+    /// machine back — or once the backstop timer runs out.
+    ForceClose,
     MinimiseWindow,
     MaximiseWindow,
     CloseWindow,
@@ -297,6 +302,10 @@ pub struct Moonlight {
     /// When the theme last changed, and the colours it was showing at the time.
     theme_started: Option<Instant>,
     previous_palette: Option<Palette>,
+    /// The alpha-2 codes there is a flag picture for, read once from the
+    /// `flags/` directory beside the executable. A set rather than a `exists()`
+    /// per row per frame.
+    flags: std::collections::HashSet<String>,
     /// Off in tests, so preference changes stay in memory.
     persist: bool,
 }
@@ -373,6 +382,7 @@ impl Moonlight {
             sidebar_started: None,
             theme_started: None,
             previous_palette: None,
+            flags: available_flags(),
             persist: true,
         }
     }
@@ -697,7 +707,23 @@ impl Moonlight {
                 self.update_status = Some(t(S::Checking, self.locale()).to_string());
                 return Task::perform(check_updates(self.locale()), Message::UpdateChecked);
             }
-            Message::UpdateChecked(status) => self.update_status = Some(status),
+            Message::UpdateChecked((status, restarting)) => {
+                self.update_status = Some(status);
+                if restarting {
+                    // The swap script is already waiting on this process id, and
+                    // will give up and change nothing if it is still here in a
+                    // minute. Leaving is the second half of the update, and used
+                    // not to happen at all — the app announced a restart and
+                    // then simply carried on running.
+                    //
+                    // Long enough to read the line, short enough that it does
+                    // not look hung.
+                    return Task::perform(
+                        tokio::time::sleep(Duration::from_millis(1200)),
+                        |()| Message::CloseWindow,
+                    );
+                }
+            }
             Message::OpenUrl(url) => open_url(url),
 
             Message::LogFilterLevel(level) => self.log_level = level,
@@ -719,9 +745,20 @@ impl Moonlight {
                 // Put the machine's proxy settings back before the window goes.
                 // Closing without this leaves every browser pointed at a core
                 // that is about to exit.
+                //
+                // The close waits for the controller to answer rather than
+                // racing it: `send` only queues the command, so closing straight
+                // afterwards could kill the process before the proxy was
+                // restored or the helper's core stopped. The timer is the
+                // backstop for a controller that never answers — a window that
+                // will not close is worse than a missed restore.
                 send(Command::Shutdown);
-                return with_window(iced::window::close);
+                return Task::perform(
+                    tokio::time::sleep(Duration::from_secs(6)),
+                    |()| Message::ForceClose,
+                );
             }
+            Message::ForceClose => return with_window(iced::window::close),
 
             Message::Controller(event) => return self.apply(event),
             Message::Tick(_) => {
@@ -767,6 +804,11 @@ impl Moonlight {
                 self.pending_probes.retain(|n| *n != node);
                 if let Some(entry) = self.nodes.iter_mut().find(|n| n.name == node) {
                     entry.latency = ms;
+                    // The probe has now happened, whatever it found. Without
+                    // this a node that answered nothing kept reading as a dash —
+                    // "not measured" — when it had in fact been asked and stayed
+                    // silent, which is exactly the `n/a` case.
+                    entry.probed = true;
                 }
                 self.preferences.record_latency(&node, ms);
             }
@@ -788,6 +830,7 @@ impl Moonlight {
                 }
             }
             Event::Error(why) => self.last_error = Some(why),
+            Event::ShutdownComplete => return with_window(iced::window::close),
             Event::PreferencesChanged(preferences) => {
                 // The controller owns the parts of preferences it changes —
                 // latencies, the proxy snapshot — so its copy wins for those,
@@ -871,9 +914,25 @@ impl Moonlight {
                     vspace(Length::Fixed(self.page_rise())),
                     if scrolls {
                         Element::from(
-                            scrollable(body)
-                                .height(Length::Fill)
-                                .style(move |theme, _| theme::scroller(palette, theme)),
+                            scrollable(
+                                // The bar is drawn *inside* the scrollable's
+                                // bounds, over whatever is beneath it — cards on
+                                // Settings ran under it and the update button
+                                // came out half-covered. Reserving the gutter on
+                                // the content is what keeps them clear of it.
+                                container(body).padding(iced::Padding {
+                                    right: SCROLLBAR_GUTTER,
+                                    ..iced::Padding::ZERO
+                                }),
+                            )
+                            .direction(iced::widget::scrollable::Direction::Vertical(
+                                iced::widget::scrollable::Scrollbar::new()
+                                    .width(SCROLLBAR_WIDTH)
+                                    .scroller_width(SCROLLBAR_WIDTH)
+                                    .margin(SCROLLBAR_MARGIN),
+                            ))
+                            .height(Length::Fill)
+                            .style(move |theme, _| theme::scroller(palette, theme)),
                         )
                     } else {
                         body
@@ -963,6 +1022,15 @@ async fn scan_apps() -> Vec<AppEntry> {
 /// a machine with a thousand programmes does not queue a thousand tasks.
 const ICON_BATCH: usize = 48;
 
+/// The scrollbar, and the gutter reserved for it.
+///
+/// A scrollable's bar is painted over its contents, not beside them, so the
+/// content has to be told to keep out of the way. The gutter is the bar plus
+/// both its margins.
+const SCROLLBAR_WIDTH: f32 = 6.0;
+const SCROLLBAR_MARGIN: f32 = 3.0;
+const SCROLLBAR_GUTTER: f32 = SCROLLBAR_WIDTH + SCROLLBAR_MARGIN * 2.0;
+
 /// Decodes every programme's icon off the UI thread.
 ///
 /// Executables with no icon resource are simply absent from the result rather
@@ -980,6 +1048,33 @@ async fn load_icons(
     })
     .await
     .unwrap_or_default()
+}
+
+/// Where the flag pictures live: `flags/` beside the executable, laid out there
+/// by the build script and by the installer.
+fn flags_directory() -> Option<std::path::PathBuf> {
+    let exe = std::env::current_exe().ok()?;
+    Some(exe.parent()?.join("flags"))
+}
+
+/// Which flags are actually on disk. Read once — a missing directory is not an
+/// error, it just means every node falls back to the globe.
+fn available_flags() -> std::collections::HashSet<String> {
+    let Some(directory) = flags_directory() else {
+        return Default::default();
+    };
+    let Ok(entries) = std::fs::read_dir(directory) else {
+        return Default::default();
+    };
+    entries
+        .filter_map(Result::ok)
+        .filter_map(|entry| {
+            let path = entry.path();
+            (path.extension()? == "png")
+                .then(|| path.file_stem()?.to_str().map(str::to_lowercase))
+                .flatten()
+        })
+        .collect()
 }
 
 async fn scan_running() -> Vec<String> {
@@ -1066,29 +1161,40 @@ fn elevate(_argument: &str) -> Result<(), String> {
     Err(HELPER_FAILED.to_string())
 }
 
-async fn check_updates(locale: AppLocale) -> String {
+/// Returns the line to show, and whether the app must now exit so the swap
+/// script can replace it.
+async fn check_updates(locale: AppLocale) -> (String, bool) {
     use moonlight_core::updater::{self, Outcome};
     match updater::check(RELEASES_API, VERSION).await {
-        Err(error) => error.to_string(),
-        Ok(Outcome::UpToDate { current }) => match locale {
-            AppLocale::Ru => format!("Установлена последняя версия ({current})"),
-            AppLocale::En => format!("You are on the latest version ({current})"),
-        },
+        Err(error) => (error.to_string(), false),
+        Ok(Outcome::UpToDate { current }) => (
+            match locale {
+                AppLocale::Ru => format!("Установлена последняя версия ({current})"),
+                AppLocale::En => format!("You are on the latest version ({current})"),
+            },
+            false,
+        ),
         Ok(Outcome::Available(release)) => {
             let version = release.version.clone();
             let temporary = std::env::temp_dir().join("moonlight-update.zip");
             match updater::download(&release.download_url, &temporary).await {
-                Err(error) => error.to_string(),
+                Err(error) => (error.to_string(), false),
                 Ok(()) => match updater::launch_swap(&temporary) {
-                    Err(error) => error.to_string(),
+                    Err(error) => (error.to_string(), false),
                     // The script waits for this process to exit before it
-                    // touches anything, so leaving is what completes the update.
-                    Ok(()) => match locale {
-                        AppLocale::Ru => {
-                            format!("Обновление до {version}. Приложение перезапустится.")
-                        }
-                        AppLocale::En => format!("Updating to {version}. The app will restart."),
-                    },
+                    // touches anything, so leaving is what completes the
+                    // update — and the caller has to actually leave.
+                    Ok(()) => (
+                        match locale {
+                            AppLocale::Ru => {
+                                format!("Обновление до {version}. Приложение перезапустится.")
+                            }
+                            AppLocale::En => {
+                                format!("Updating to {version}. The app will restart.")
+                            }
+                        },
+                        true,
+                    ),
                 },
             }
         }
@@ -1231,6 +1337,15 @@ impl Moonlight {
     pub fn app_icon(&self, executable: &str) -> Option<&iced::widget::image::Handle> {
         self.app_icons.get(executable)
     }
+    /// The flag picture for a node's region, if one shipped with the build.
+    pub fn flag_image(&self, code: &str) -> Option<iced::widget::image::Handle> {
+        let code = code.to_lowercase();
+        if !self.flags.contains(&code) {
+            return None;
+        }
+        let path = flags_directory()?.join(format!("{code}.png"));
+        Some(iced::widget::image::Handle::from_path(path))
+    }
     pub fn is_running(&self, executable: &str) -> bool {
         self.running
             .iter()
@@ -1312,7 +1427,7 @@ impl Moonlight {
             "{} {} · {}",
             t(S::AutoPicked, self.locale()),
             best.0.title(),
-            moonlight_core::format::latency(Some(best.1))
+            moonlight_core::format::latency(Some(best.1), true)
         ))
     }
 
@@ -1453,6 +1568,13 @@ mod tests {
             ms: None,
         });
         assert_eq!(app.nodes[0].latency, None);
+        // Asked and silent, which is what `n/a` means. A node left unprobed
+        // reads as a dash instead, and the two must not be confused.
+        assert!(app.nodes[0].probed);
+        assert_eq!(
+            moonlight_core::format::latency(app.nodes[0].latency, app.nodes[0].probed),
+            "n/a"
+        );
     }
 
     #[test]

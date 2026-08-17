@@ -19,6 +19,14 @@ pub struct Node {
     /// measured — which the UI shows as `n/a`, not as `0 ms`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub latency: Option<u32>,
+    /// Whether a probe has actually finished for this node.
+    ///
+    /// Separate from `latency` because `None` alone cannot tell "never measured"
+    /// from "measured, no answer", and the two want opposite words: a dash for
+    /// the first, `n/a` for the second. Reporting `n/a` before anything has been
+    /// probed says the server did not answer a question nobody asked it.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub probed: bool,
     /// True for a `url-test`, `fallback` or `load-balance` group the panel put
     /// in its selector. Those are choices the operator built deliberately — a
     /// balancer across several nodes, or an auto-picker — and hiding them
@@ -50,6 +58,7 @@ impl Node {
             kind: kind.into(),
             server: None,
             latency: None,
+            probed: false,
             is_group: false,
             protocol_label: None,
         }

@@ -43,12 +43,19 @@ foreach ($size in $sizes) {
     $brush = New-Object System.Drawing.SolidBrush $lime
     $g.FillPath($brush, $path)
 
-    # The crescent: a disc with a second disc taken out of it, which is what the
-    # SVG's arc pair describes.
+    # The crescent, as a disc with a second disc taken out of it.
+    #
+    # Both circles are solved from the SVG's own arc pair rather than guessed:
+    #   M30 22 a8.4 8.4 0 1 1 -9.4 -8.34 A10 10 0 0 0 30 22 Z
+    # is an r=8.4 arc and an r=10 arc between (30,22) and (20.6,13.66), whose
+    # centres work out at (21.6, 22) and (30.463, 12.011). Eyeballing the second
+    # one — which an earlier pass did, putting it at (25.6, 17) with the wrong
+    # radius — gives a crescent of the wrong thickness and angle, which is the
+    # whole reason the icon did not look like the mark in the app.
     $crescent = New-Object System.Drawing.Drawing2D.GraphicsPath
-    $crescent.AddEllipse([float](21.6 * $s - 8.4 * $s), [float](22 * $s - 8.4 * $s), [float](16.8 * $s), [float](16.8 * $s))
+    $crescent.AddEllipse([float]((21.6 - 8.4) * $s), [float]((22.0 - 8.4) * $s), [float](16.8 * $s), [float](16.8 * $s))
     $bite = New-Object System.Drawing.Drawing2D.GraphicsPath
-    $bite.AddEllipse([float](25.6 * $s - 8.4 * $s), [float](17.0 * $s - 8.4 * $s), [float](16.8 * $s), [float](16.8 * $s))
+    $bite.AddEllipse([float]((30.463 - 10.0) * $s), [float]((12.011 - 10.0) * $s), [float](20.0 * $s), [float](20.0 * $s))
     $region = New-Object System.Drawing.Region $crescent
     $region.Exclude($bite)
     $inkBrush = New-Object System.Drawing.SolidBrush $ink

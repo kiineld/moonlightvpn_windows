@@ -1,6 +1,6 @@
 //! The connect screen: the dial on the left, the server list on the right.
 
-use iced::widget::{button, canvas, column, container, row, text};
+use iced::widget::{button, canvas, column, container, row, scrollable, text};
 use iced::{Alignment, Border, Element, Length};
 
 use moonlight_core::{format, ConnectionState, Node};
@@ -329,6 +329,11 @@ fn server_column(app: &Moonlight) -> Element<'_, Message> {
         list = list.push(vspace(Length::Fixed(8.0)));
         list = list.push(components::soft_divider(palette));
         list = list.push(vspace(Length::Fixed(8.0)));
+
+        // The nodes scroll; the heading and Авто stay put. A panel of seven is
+        // fine either way, but a panel of thirty had its tail simply cut off at
+        // the bottom of the card with no way to reach it.
+        let mut rows = column![].spacing(2);
         for node in nodes {
             // A panel that already offers a url-test picker makes the app's own
             // Авто row redundant, so only one of the two is shown.
@@ -336,11 +341,25 @@ fn server_column(app: &Moonlight) -> Element<'_, Message> {
                 continue;
             }
             let selected = app.preferences().selected_node.as_deref() == Some(node.name.as_str());
-            list = list.push(node_row(app, node, selected));
+            rows = rows.push(node_row(app, node, selected));
         }
+        list = list.push(
+            scrollable(rows.padding(iced::Padding {
+                right: crate::SCROLLBAR_GUTTER,
+                ..iced::Padding::ZERO
+            }))
+            .direction(scrollable::Direction::Vertical(
+                scrollable::Scrollbar::new()
+                    .width(crate::SCROLLBAR_WIDTH)
+                    .scroller_width(crate::SCROLLBAR_WIDTH)
+                    .margin(crate::SCROLLBAR_MARGIN),
+            ))
+            .height(Length::Fill)
+            .style(move |theme, _| theme::scroller(palette, theme)),
+        );
     }
 
-    list.width(Length::Fill).into()
+    list.height(Length::Fill).width(Length::Fill).into()
 }
 
 /// "Авто" is the app's own latency picker.
@@ -403,11 +422,24 @@ fn node_row<'a>(app: &'a Moonlight, node: &'a Node, selected: bool) -> Element<'
     let palette = app.palette_of();
     let locale = app.locale_of();
 
-    let flag: Element<'a, Message> = match node.flag() {
-        Some(flag) => text(flag).size(20.0).into(),
+    // A picture, not the emoji. Windows renders a regional-indicator pair as the
+    // two letters it is built from — 🇩🇪 comes out as "DE" — and no system font
+    // on the platform can draw these, so the list read as a column of country
+    // codes.
+    let flag: Element<'a, Message> = match node.region_code().and_then(|c| app.flag_image(&c)) {
+        Some(handle) => container(
+            iced::widget::image(handle)
+                .width(Length::Fixed(24.0))
+                .height(Length::Fixed(18.0)),
+        )
+        .width(Length::Fixed(24.0))
+        .into(),
         // A cross-country balancer has no flag, and inventing one would be a lie
         // about where the traffic goes.
-        None => icon(Icon::Globe, 18.0, palette.text_muted),
+        None => container(icon(Icon::Globe, 18.0, palette.text_muted))
+            .width(Length::Fixed(24.0))
+            .center_x(Length::Fixed(24.0))
+            .into(),
     };
 
     // A node still being measured shows a spinner rather than its old number,
@@ -419,8 +451,11 @@ fn node_row<'a>(app: &'a Moonlight, node: &'a Node, selected: bool) -> Element<'
         text("…").size(scale::META).color(palette.text_muted).into()
     } else {
         let (dot, label) = match node.latency {
-            Some(ms) => (palette.ping_color(ms), format::latency(Some(ms))),
-            None => (palette.text_muted, format::latency(None)),
+            Some(ms) => (palette.ping_color(ms), format::latency(Some(ms), true)),
+            None => (
+                palette.text_muted,
+                format::latency(None, node.probed),
+            ),
         };
         row![
             container(vspace(Length::Fixed(6.0)))

@@ -10,6 +10,7 @@ Set-Location (Join-Path $PSScriptRoot '..')
 
 & $PSScriptRoot\fetch-fonts.ps1
 & $PSScriptRoot\fetch-mihomo.ps1
+& $PSScriptRoot\fetch-flags.ps1
 
 cargo build --release --target x86_64-pc-windows-msvc
 
@@ -23,5 +24,10 @@ Copy-Item "$target\moonlight-helper.exe" $dist
 Copy-Item resources\mihomo\mihomo.exe    $dist
 Copy-Item resources\mihomo\wintun.dll    $dist
 Copy-Item LICENSE.md                     $dist
+
+# The flags the server list draws. Loaded from disk at runtime rather than
+# embedded, so 249 pictures cost nothing in the binary.
+New-Item -ItemType Directory -Force -Path "$dist\flags" | Out-Null
+Copy-Item resources\flags\*.png "$dist\flags"
 
 Get-ChildItem $dist

@@ -71,6 +71,7 @@ Source: "..\dist\Moonlight\{#HelperExe}"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\dist\Moonlight\mihomo.exe";   DestDir: "{app}"; Flags: ignoreversion
 Source: "..\dist\Moonlight\wintun.dll";   DestDir: "{app}"; Flags: ignoreversion
 Source: "..\dist\Moonlight\LICENSE.md";   DestDir: "{app}"; Flags: ignoreversion
+Source: "..\dist\Moonlight\flags\*.png";  DestDir: "{app}\flags"; Flags: ignoreversion
 
 [Icons]
 Name: "{group}\{#AppName}";        Filename: "{app}\{#AppExe}"

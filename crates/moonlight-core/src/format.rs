@@ -181,10 +181,17 @@ pub fn age(seconds_ago: i64, locale: AppLocale) -> String {
 /// `n/a` rather than a dash for a node that has not answered: a dash reads as
 /// "not measured yet", and the two are worth telling apart when one of them
 /// means the node is down.
-pub fn latency(ms: Option<u32>) -> String {
+/// A node's latency.
+///
+/// `probed` separates the two things a missing number can mean. Before any probe
+/// has run the answer is simply unknown, and a dash says so; `n/a` there claims
+/// the server failed to answer a question it was never asked. Once a probe has
+/// finished and come back with nothing, `n/a` is the truth.
+pub fn latency(ms: Option<u32>, probed: bool) -> String {
     match ms {
-        None => "n/a".to_string(),
         Some(ms) => format!("{ms} ms"),
+        None if probed => "n/a".to_string(),
+        None => "—".to_string(),
     }
 }
 
@@ -373,8 +380,16 @@ mod tests {
 
     #[test]
     fn an_unmeasured_node_is_not_a_zero() {
-        assert_eq!(latency(None), "n/a");
-        assert_eq!(latency(Some(37)), "37 ms");
+        assert_eq!(latency(Some(37), true), "37 ms");
+        assert_eq!(latency(Some(37), false), "37 ms");
+    }
+
+    #[test]
+    fn silence_and_never_asked_read_differently() {
+        // `n/a` is a claim that the server did not answer. Before any probe has
+        // run, nothing has asked it anything, and saying so is a lie.
+        assert_eq!(latency(None, false), "—");
+        assert_eq!(latency(None, true), "n/a");
     }
 
     #[test]

@@ -245,14 +245,20 @@ fn quota<'a>(
         } else {
             palette.danger
         };
-        return button(components::centre(
+        // No `centre` here: it fills the available height, which is bounded
+        // inside a fixed-height button but not inside this one — it has no set
+        // height, so filling made the card stretch down the rail with its
+        // contents stranded at the bottom. The padding centres it already,
+        // because the content is what gives the button its height.
+        return button(
             column![
                 icon(Icon::Sparkles, 16.0, tone),
                 container(components::bar(used, palette, 4.0)).width(Length::Fixed(34.0)),
             ]
             .spacing(6)
-            .align_x(Alignment::Center),
-        ))
+            .align_x(Alignment::Center)
+            .width(Length::Fill),
+        )
         .on_press(Message::Navigate(Page::Subscription))
         .padding([12, 0])
         .width(Length::Fill)

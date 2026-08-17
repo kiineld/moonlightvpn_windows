@@ -185,9 +185,13 @@ impl MihomoApi {
             .filter_map(|name| {
                 let entry = proxies.get(name)?;
                 let kind = entry.get("type")?.as_str()?.to_string();
+                let latency = last_history_delay(entry);
                 Some(Node {
                     name: name.to_string(),
-                    latency: last_history_delay(entry),
+                    // The core's own history is a completed probe, so a number
+                    // read back from it counts as measured.
+                    probed: latency.is_some(),
+                    latency,
                     is_group: GROUP_TYPES.contains(&kind.to_lowercase().as_str()),
                     kind,
                     server: None,

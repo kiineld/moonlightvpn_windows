@@ -9,5 +9,7 @@ resources/mihomo/wintun.dll
 # Written by fetch-mihomo.ps1 beside the core it stamps, so it is as much a
 # build artifact as the binaries above.
 resources/mihomo/VERSION
+# Fetched by fetch-flags.ps1, like the fonts and the core.
+resources/flags/
 *.pdb
 .DS_Store
