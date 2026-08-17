@@ -71,26 +71,17 @@ pub fn view(app: &Moonlight) -> Element<'_, Message> {
     .spacing(12)
     .align_y(Alignment::Center);
 
+    // `center_y`, not `height`: a container puts its content at the **top** of
+    // the box, and the title stack is 44pt inside a 64pt band, so the whole bar
+    // rode 20pt high on every screen. The band is drawn by the shell — this
+    // container carries no fill of its own, only the metric.
     container(
         row![titles, hspace(Length::Fill), actions]
             .spacing(12)
             .align_y(Alignment::Center),
     )
-    .height(Length::Fixed(metrics::HEADER))
+    .center_y(Length::Fixed(metrics::HEADER))
     .padding([0, 24])
-    .style(move |_| container::Style {
-        // A soft hairline, not the full one: it separates the header from the
-        // page rather than drawing a box around it.
-        border: iced::Border {
-            width: 0.0,
-            ..Default::default()
-        },
-        background: None,
-        ..container::Style {
-            background: Some(Background::Color(iced::Color::TRANSPARENT)),
-            ..Default::default()
-        }
-    })
     .into()
 }
 
@@ -105,13 +96,18 @@ fn action<'a>(
     // The glyph swaps for a loader while the action is running, rather than the
     // button being disabled with no explanation.
     let glyph = if busy { Icon::LoaderCircle } else { glyph };
-    let ink = if message.is_some() {
+    // Unavailable is carried by **opacity**, not by a different colour: the
+    // macOS client fades the whole pill to 45% and keeps the accent ink. Turning
+    // the label grey instead makes it read as a different kind of button rather
+    // than as this one being unavailable.
+    let enabled = message.is_some();
+    let ink = if enabled {
         palette.accent_ink
     } else {
-        palette.text_muted
+        theme::alpha(palette.accent_ink, 0.45)
     };
 
-    let mut element = button(
+    let mut element = button(crate::components::centre(
         row![
             // 2.2 rather than lucide's 2.0: at 16px the composition thickens
             // these two glyphs so they hold their weight beside 800 type.
@@ -123,10 +119,17 @@ fn action<'a>(
         ]
         .spacing(8)
         .align_y(Alignment::Center),
-    )
+    ))
     .height(Length::Fixed(metrics::CONTROL_SM))
     .padding([0, 15])
-    .style(move |_, status| theme::header_button(palette, status));
+    .style(move |_, status| {
+        let mut style = theme::header_button(palette, status);
+        if !enabled {
+            style.text_color = ink;
+            style.border.color = theme::alpha(palette.hairline, 0.45);
+        }
+        style
+    });
 
     if let Some(message) = message {
         element = element.on_press(message);

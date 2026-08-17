@@ -128,8 +128,11 @@ pub mod radii {
     pub const CHIP: f32 = 7.0;
     /// 38px icon button.
     pub const ICON_SM: f32 = 11.0;
-    /// 36–42px icon chip, header tile, avatar.
+    /// 36–40px icon chip, header tile, avatar.
     pub const ICON: f32 = 12.0;
+    /// The 42px row tile. The composition sets 13 literally, between
+    /// `--ml-r-icon` and `--ml-r-icon-lg`.
+    pub const TILE: f32 = 13.0;
     /// 46px icon chip.
     pub const ICON_LG: f32 = 14.0;
     /// Input, link box, tab slot.
@@ -165,8 +168,9 @@ pub mod border {
 pub mod metrics {
     /// The desktop sidebar.
     pub const RAIL: f32 = 236.0;
-    /// Collapsed to an icon rail.
-    pub const RAIL_COLLAPSED: f32 = 76.0;
+    /// Collapsed to an icon rail. 72, as the macOS client sets it — the
+    /// `--ml-rail-w-tablet` token's 76 is the web shell's value.
+    pub const RAIL_COLLAPSED: f32 = 72.0;
     /// The page header. The token says 56; the desktop composition sets 64.
     pub const HEADER: f32 = 64.0;
     /// The custom title bar.
@@ -180,10 +184,15 @@ pub mod metrics {
     /// A primary button.
     pub const CONTROL: f32 = 54.0;
     pub const CONTROL_INPUT: f32 = 48.0;
-    /// The connect dial.
-    pub const DIAL: f32 = 238.0;
+    /// The connect dial. Larger than the macOS client's 238: this window is
+    /// wider than the Mac one and the dial is the screen's whole subject, which
+    /// at 238 floated in the middle of a panel with room to spare on every side.
+    pub const DIAL: f32 = 288.0;
     /// The stats strip under it.
     pub const STATS_MAX: f32 = 420.0;
+    /// The connect screen's server column, which is a fixed width rather than a
+    /// portion of the window.
+    pub const SERVER_COLUMN: f32 = 340.0;
 
     /// Between cards in a page column.
     pub const GAP_STACK: f32 = 14.0;

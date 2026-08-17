@@ -69,6 +69,9 @@ features = [
     "Win32_UI_Shell",
     "Win32_UI_WindowsAndMessaging",
     "Win32_Networking_WinInet",
+    # Reading a programme's own icon out of its executable: SHGetFileInfoW hands
+    # back an HICON, and turning one into pixels is GDI's job.
+    "Win32_Graphics_Gdi",
 ]
 
 [profile.release]

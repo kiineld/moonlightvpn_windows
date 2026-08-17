@@ -1,9 +1,12 @@
 //! The sidebar, and the quota block at its foot.
 //!
-//! It collapses to a 72pt icon rail; the wordmark is the toggle.
+//! Ported metric-for-metric from the macOS client's `RootView.Sidebar`, which is
+//! the reference this product is meant to look like: 236pt expanded, 72pt as an
+//! icon rail, and a quota card that is always present — with zeroes rather than
+//! dashes before a subscription exists.
 
 use iced::widget::{button, canvas, column, container, row, text};
-use iced::{Alignment, Background, Element, Length};
+use iced::{Alignment, Background, Border, Element, Length};
 
 use moonlight_core::preferences::Preferences;
 use moonlight_core::{format, AppLocale, SubscriptionInfo};
@@ -16,16 +19,22 @@ use crate::localization::{t, S};
 use crate::logo::Logo;
 use crate::{hspace, theme, vspace, Message, Page};
 
-/// The collapsed rail and the full sidebar, from `tokens/spacing.css`.
+/// The collapsed rail and the full sidebar.
 const RAIL: f32 = metrics::RAIL_COLLAPSED;
 const EXPANDED: f32 = metrics::RAIL;
 
-/// The wordmark. Smaller and lighter than the display steps: 17px at 700, from
-/// the composition — it labels the app rather than titling a page.
+/// The wordmark: 17px at 700 with display tracking, from the composition — it
+/// labels the app rather than titling a page.
 const WORDMARK: f32 = 17.0;
 
-/// The logo tile.
+/// The logo tile beside it.
 const MARK: f32 = 32.0;
+const MARK_RADIUS: f32 = 10.0;
+
+/// The collapse control — a 30pt square on the panel surface, which is what
+/// gives it an affordance. The wordmark used to be the toggle, which worked but
+/// advertised nothing.
+const COLLAPSE: f32 = 30.0;
 
 pub fn view<'a>(
     palette: Palette,
@@ -36,6 +45,7 @@ pub fn view<'a>(
     info: &'a SubscriptionInfo,
 ) -> Element<'a, Message> {
     let width = if collapsed { RAIL } else { EXPANDED };
+    let pad_x = if collapsed { 10.0 } else { 14.0 };
 
     let mut items = column![].spacing(6);
     for page in Page::SIDEBAR {
@@ -43,7 +53,7 @@ pub fn view<'a>(
     }
 
     let content = column![
-        wordmark(palette, collapsed),
+        header(palette, collapsed),
         items,
         vspace(Length::Fill),
         quota(palette, locale, collapsed, preferences, info),
@@ -51,9 +61,9 @@ pub fn view<'a>(
     .spacing(6)
     .padding(iced::Padding {
         top: 18.0,
-        right: 14.0,
+        right: pad_x,
         bottom: 16.0,
-        left: 14.0,
+        left: pad_x,
     })
     .width(Length::Fixed(width));
 
@@ -69,9 +79,6 @@ pub fn view<'a>(
 
 /// The rail's right-hand hairline, drawn as its own strip so it spans the full
 /// height rather than being clipped by the rail's padding.
-///
-/// Without it the deep-slate rail and the slate page meet at two values close
-/// enough to read as one uneven surface.
 pub fn rule<'a>(palette: Palette) -> Element<'a, Message> {
     container(hspace(Length::Fixed(1.0)))
         .height(Length::Fill)
@@ -82,16 +89,30 @@ pub fn rule<'a>(palette: Palette) -> Element<'a, Message> {
         .into()
 }
 
-/// The logo and the wordmark, which together double as the collapse toggle —
-/// which is why this is a button rather than a label with a chevron beside it.
-fn wordmark<'a>(palette: Palette, collapsed: bool) -> Element<'a, Message> {
-    let mark = canvas(Logo::new(palette))
+/// The logo, the wordmark and the collapse control.
+///
+/// Collapsed there is no room beside the logo, so the control takes its own line
+/// underneath rather than being dropped — a rail with no way back out of it is a
+/// state the user cannot leave.
+fn header<'a>(palette: Palette, collapsed: bool) -> Element<'a, Message> {
+    let mark = canvas(Logo::with_radius(palette, MARK_RADIUS))
         .width(Length::Fixed(MARK))
         .height(Length::Fixed(MARK));
 
-    let inner: Element<'a, Message> = if collapsed {
-        mark.into()
-    } else {
+    if collapsed {
+        return column![
+            container(mark).center_x(Length::Fill),
+            container(collapse_button(palette, collapsed)).center_x(Length::Fill),
+        ]
+        .spacing(8)
+        .padding(iced::Padding {
+            bottom: 8.0,
+            ..iced::Padding::ZERO
+        })
+        .into();
+    }
+
+    container(
         row![
             mark,
             text("moonlight")
@@ -99,23 +120,44 @@ fn wordmark<'a>(palette: Palette, collapsed: bool) -> Element<'a, Message> {
                 .size(WORDMARK)
                 .color(palette.text),
             hspace(Length::Fill),
-            icon(Icon::PanelLeftClose, 16.0, palette.text_muted),
+            collapse_button(palette, collapsed),
         ]
         .spacing(10)
-        .align_y(Alignment::Center)
-        .into()
+        .align_y(Alignment::Center),
+    )
+    .padding(iced::Padding {
+        top: 0.0,
+        right: 6.0,
+        bottom: 14.0,
+        left: 6.0,
+    })
+    .into()
+}
+
+fn collapse_button<'a>(palette: Palette, collapsed: bool) -> Element<'a, Message> {
+    let glyph = if collapsed {
+        Icon::PanelLeftOpen
+    } else {
+        Icon::PanelLeftClose
     };
 
-    button(inner)
+    button(container(icon(glyph, 17.0, palette.text_muted)).center(Length::Fill))
         .on_press(Message::ToggleSidebar)
-        .padding(iced::Padding {
-            top: 0.0,
-            right: 6.0,
-            bottom: 14.0,
-            left: 6.0,
+        .width(Length::Fixed(COLLAPSE))
+        .height(Length::Fixed(COLLAPSE))
+        .padding(0)
+        .style(move |_, status| button::Style {
+            background: Some(Background::Color(match status {
+                button::Status::Hovered | button::Status::Pressed => palette.surface2,
+                _ => palette.surface,
+            })),
+            text_color: palette.text_muted,
+            border: Border {
+                radius: iced::border::Radius::from(9.0),
+                ..Default::default()
+            },
+            ..Default::default()
         })
-        .width(Length::Fill)
-        .style(move |_, status| theme::nav_button(palette, status))
         .into()
 }
 
@@ -136,7 +178,9 @@ fn nav_item<'a>(
     };
 
     let inner: Element<'a, Message> = if collapsed {
-        icon(page.icon(), 19.0, ink)
+        container(icon(page.icon(), 19.0, ink))
+            .center_x(Length::Fill)
+            .into()
     } else {
         row![
             icon(page.icon(), 19.0, ink),
@@ -150,10 +194,10 @@ fn nav_item<'a>(
         .into()
     };
 
-    button(inner)
+    button(components::centre(inner))
         .on_press(Message::Navigate(page))
         .height(Length::Fixed(metrics::NAV_ROW))
-        .padding([0, 12])
+        .padding(if collapsed { [0, 0] } else { [0, 12] })
         .width(Length::Fill)
         .style(move |_, status| {
             if selected {
@@ -165,8 +209,13 @@ fn nav_item<'a>(
         .into()
 }
 
-/// The quota block. A partial fill is the point here, which is exactly why the
-/// connect dial does not carry one.
+/// The quota block.
+///
+/// It is drawn whether or not a subscription exists. Before one does the figures
+/// read zero rather than "—": a dash is an answer *about a plan*, and showing it
+/// before there is one looks like a plan whose panel omitted a field. The
+/// earlier build replaced the whole card with an "Добавить подписку" text link,
+/// which left the foot of the sidebar looking unfinished.
 fn quota<'a>(
     palette: Palette,
     locale: AppLocale,
@@ -174,65 +223,91 @@ fn quota<'a>(
     preferences: &'a Preferences,
     info: &'a SubscriptionInfo,
 ) -> Element<'a, Message> {
+    let has_subscription = preferences.subscription_url.is_some();
+    let used = if has_subscription {
+        info.used_fraction().unwrap_or(0.0) as f32
+    } else {
+        0.0
+    };
+
+    // At 72pt there is no room for a card, but the plan still has to be
+    // glanceable — so it becomes the mark and the bar alone.
     if collapsed {
-        // 72pt has no room for a plan figure and a bar, and half of one reads
-        // as a clipped layout rather than as a deliberate collapse.
-        return vspace(Length::Fixed(0.0)).into();
-    }
-    if preferences.subscription_url.is_none() {
+        let tone = if info.is_active() || !has_subscription {
+            palette.accent_ink
+        } else {
+            palette.danger
+        };
         return button(
-            text(t(S::AddSubscription, locale))
-                .size(scale::META)
-                .color(palette.text_muted),
+            column![
+                icon(Icon::Sparkles, 16.0, tone),
+                container(components::bar(used, palette, 4.0)).width(Length::Fixed(34.0)),
+            ]
+            .spacing(6)
+            .align_x(Alignment::Center),
         )
-        .on_press(Message::Navigate(Page::Import))
-        .padding(14)
+        .on_press(Message::Navigate(Page::Subscription))
+        .padding([12, 0])
         .width(Length::Fill)
-        .style(move |_, status| theme::nav_button(palette, status))
+        .style(move |_, status| {
+            let mut style = theme::outlined(palette, status);
+            style.border.radius = iced::border::Radius::from(radii::FIELD);
+            style.border.width = 0.0;
+            style
+        })
         .into();
     }
 
-    let (status_label, status_fill) = if info.is_active() {
-        (t(S::Active, locale), palette.accent)
+    let days = if has_subscription {
+        format::time_left(info.expire, locale)
     } else {
-        (t(S::Expired, locale), palette.danger)
+        format::days(Some(0), locale)
     };
 
-    let mut content = column![
-        row![
-            components::overline(t(S::Remaining, locale), palette),
-            hspace(Length::Fill),
-            components::pill(
-                status_label.to_string(),
-                status_fill,
-                palette.text_on_accent
-            ),
-        ]
-        .align_y(Alignment::Center),
-        text(format::time_left(info.expire, locale))
-            .font(moonlight_design::display())
-            .size(22.0)
-            .color(palette.text),
-    ]
-    .spacing(8);
-
-    // The bar is only drawn for a plan that has a quota. An unlimited plan with
-    // an empty bar under it reads as "nothing used of nothing".
-    if let Some(fraction) = info.used_fraction() {
-        content = content.push(components::bar(fraction as f32, palette, 6.0));
-    }
-    content = content.push(
-        text(format!(
+    let quota_line = if has_subscription {
+        format!(
             "{} {}",
             format::quota(info.used(), info.total, locale),
             t(S::OfTraffic, locale)
-        ))
-        .size(12.0)
-        .color(palette.text_muted),
-    );
+        )
+    } else {
+        format!(
+            "{} {}",
+            format::bytes(Some(0), locale),
+            t(S::OfTraffic, locale)
+        )
+    };
 
-    // A button, not a card: it goes to the subscription screen, and the
-    // composition lifts its border to the accent on hover to say so.
+    let mut heading = row![components::overline(t(S::Remaining, locale), palette)]
+        .spacing(8)
+        .align_y(Alignment::Center);
+    heading = heading.push(hspace(Length::Fill));
+    // The status pill only means something once there is a plan to have a
+    // status.
+    if has_subscription {
+        let (label, fill) = if info.is_active() {
+            (t(S::Active, locale), palette.accent)
+        } else {
+            (t(S::Expired, locale), palette.danger)
+        };
+        heading = heading.push(components::pill(
+            label.to_string(),
+            fill,
+            palette.text_on_accent,
+        ));
+    }
+
+    let content = column![
+        heading,
+        text(days)
+            .font(moonlight_design::display())
+            .size(22.0)
+            .color(palette.text),
+        components::bar(used, palette, 6.0),
+        text(quota_line).size(12.0).color(palette.text_muted),
+    ]
+    .spacing(8);
+
     button(content)
         .on_press(Message::Navigate(Page::Subscription))
         .padding(14)
@@ -251,19 +326,31 @@ mod tests {
     use super::*;
 
     #[test]
-    fn the_rail_widths_come_from_the_tokens() {
-        // --ml-rail-w and --ml-rail-w-tablet. The Swift port had rounded these
-        // to 248 and 72, which is a 12px and a 4px drift from the design.
+    fn the_rail_widths_match_the_macos_client() {
+        // 236 expanded, 72 collapsed. An earlier pass had 248 and 76, which is a
+        // 12pt and a 4pt drift from the client this is meant to mirror.
         assert_eq!(EXPANDED, 236.0);
-        assert_eq!(RAIL, 76.0);
+        assert_eq!(RAIL, 72.0);
     }
 
     #[test]
-    fn the_quota_block_is_hidden_on_the_rail() {
+    fn the_quota_block_survives_the_collapse() {
+        // It becomes the bar alone rather than disappearing: the plan is the one
+        // thing the rail still has to make glanceable.
         let preferences = Preferences::default();
         let info = SubscriptionInfo::default();
         let element = quota(Palette::DARK, AppLocale::Ru, true, &preferences, &info);
-        // A zero-height spacer is what "nothing here" looks like in iced.
-        assert_eq!(element.as_widget().size().height, Length::Fixed(0.0));
+        assert_ne!(element.as_widget().size().height, Length::Fixed(0.0));
+    }
+
+    #[test]
+    fn the_quota_card_is_drawn_before_a_subscription_exists() {
+        // With no plan it reads zeroes, not dashes, and never collapses to a
+        // bare text link.
+        let preferences = Preferences::default();
+        assert!(preferences.subscription_url.is_none());
+        let info = SubscriptionInfo::default();
+        let element = quota(Palette::DARK, AppLocale::Ru, false, &preferences, &info);
+        assert_ne!(element.as_widget().size().height, Length::Fixed(0.0));
     }
 }

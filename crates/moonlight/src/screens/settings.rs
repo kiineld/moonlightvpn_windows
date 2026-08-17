@@ -16,7 +16,7 @@ use crate::{
 
 pub fn view(app: &Moonlight) -> Element<'_, Message> {
     row![
-        column![tunnel(app)]
+        column![tunnel(app), system(app)]
             .spacing(16)
             .width(Length::FillPortion(1)),
         column![application(app), support(app), about(app)]
@@ -165,11 +165,39 @@ fn mode_row<'a>(
         .into()
 }
 
+/// The СИСТЕМА group.
+///
+/// One row, not the three the composition draws. The other two it specifies —
+/// minimise-to-tray and connect-on-launch — are not implemented, and a switch
+/// that flips and changes nothing is worse than an absent one.
+fn system(app: &Moonlight) -> Element<'_, Message> {
+    let palette = app.palette_of();
+    let locale = app.locale_of();
+
+    let panel = column![components::setting_row(
+        t(S::LaunchAtLogin, locale).to_string(),
+        Some(t(S::LaunchAtLoginNote, locale).to_string()),
+        components::toggle(
+            app.preferences().launch_at_login,
+            Message::ToggleLaunchAtLogin,
+            palette,
+        ),
+        palette,
+    )];
+
+    column![
+        components::overline(t(S::SectionSystem, locale), palette),
+        vspace(Length::Fixed(12.0)),
+        components::surface(panel, palette),
+    ]
+    .into()
+}
+
 fn application(app: &Moonlight) -> Element<'_, Message> {
     let palette = app.palette_of();
     let locale = app.locale_of();
 
-    let language = components::segmented(
+    let language = components::segmented_compact(
         &[(AppLocale::Ru, "RU"), (AppLocale::En, "EN")],
         locale,
         Message::SetLocale,
@@ -246,17 +274,8 @@ fn support(app: &Moonlight) -> Element<'_, Message> {
             Some(Message::Navigate(Page::Logs)),
             palette,
         ),
-        components::divider(palette),
-        components::action_row(
-            Icon::Globe,
-            palette.cat2,
-            palette.text_on_accent,
-            t(S::NavConnections, locale).to_string(),
-            t(S::ConnectionsNote, locale).to_string(),
-            Some(Icon::ChevronRight),
-            Some(Message::Navigate(Page::Connections)),
-            palette,
-        ),
+        // Connections is a rail destination now, so a second way in from here
+        // would be the same screen listed twice.
     ]
     .spacing(2);
 

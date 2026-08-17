@@ -20,28 +20,62 @@ pub fn view(app: &Moonlight) -> Element<'_, Message> {
     let locale = app.locale_of();
     let grouped = app.connections_by_process();
 
+    // "Активно: 0" as an accent-wash pill, and a danger-wash *Закрыть все* that
+    // fades rather than greys out when there is nothing to close — the shapes
+    // the macOS client uses for this row.
+    let live = !grouped.is_empty();
+    let close_ink = if live {
+        palette.danger
+    } else {
+        theme::alpha(palette.danger, 0.5)
+    };
+
     let head = row![
-        components::overline(t(S::NavConnections, locale), palette),
+        components::count_pill(
+            format!("{}: {}", t(S::ActiveConnections, locale), app.connections().len()),
+            palette,
+        ),
         hspace(Length::Fill),
-        text(format!("{}", app.connections().len()))
-            .size(scale::META)
-            .color(palette.text_muted),
-        hspace(Length::Fixed(12.0)),
-        button(
-            text(t(S::CloseAll, locale))
-                .size(scale::BODY_SM)
-                .font(moonlight_design::ui(EMPHATIC))
-        )
-        .on_press_maybe((!grouped.is_empty()).then_some(Message::CloseAllConnections))
-        .padding([9, 16])
-        .style(move |_, status| theme::header_button(palette, status)),
+        button(components::centre(
+            row![
+                moonlight_design::icon_thin(Icon::X, 13.0, close_ink, 2.4),
+                text(t(S::CloseAll, locale))
+                    .size(scale::META)
+                    .font(moonlight_design::ui(EMPHATIC))
+                    .color(close_ink),
+            ]
+            .spacing(7)
+            .align_y(Alignment::Center)
+        ))
+        .on_press_maybe(live.then_some(Message::CloseAllConnections))
+        .padding([0, 13])
+        .height(Length::Fixed(30.0))
+        .style(move |_, _| button::Style {
+            background: Some(iced::Background::Color(if live {
+                palette.danger_quiet
+            } else {
+                theme::alpha(palette.danger_quiet, 0.5)
+            })),
+            text_color: close_ink,
+            border: iced::Border {
+                radius: iced::border::Radius::from(moonlight_design::radii::PILL),
+                ..Default::default()
+            },
+            ..Default::default()
+        }),
     ]
     .align_y(Alignment::Center);
 
     let mut list = column![].spacing(2);
     if grouped.is_empty() {
-        list = list.push(components::empty_state(
-            t(S::NoConnections, locale),
+        let message = if app.state().is_connected() {
+            S::NoConnections
+        } else {
+            S::ConnectionsNeedTunnel
+        };
+        list = list.push(components::empty_state_icon(
+            Icon::Globe,
+            t(message, locale),
             palette,
         ));
     } else {

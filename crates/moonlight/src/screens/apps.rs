@@ -5,12 +5,16 @@ use iced::{Alignment, Element, Length};
 
 use moonlight_core::split_rule::Kind;
 use moonlight_core::{SplitMode, TunnelMode};
-use moonlight_design::typography::{scale, EMPHATIC};
+use moonlight_design::typography::{scale, ROW_TITLE};
 use moonlight_design::{icon, Icon};
 
 use crate::components;
 use crate::localization::{t, S};
 use crate::{hspace, theme, vspace, Message, Moonlight};
+
+/// The band each of the two columns opens with, sized to the search field so
+/// both headings share a baseline.
+const COLUMN_HEAD: f32 = 38.0;
 
 pub fn view(app: &Moonlight) -> Element<'_, Message> {
     let palette = app.palette_of();
@@ -58,17 +62,24 @@ fn programs(app: &Moonlight) -> iced::widget::Column<'_, Message> {
     let locale = app.locale_of();
     let needle = app.app_search().to_lowercase();
 
-    let head = row![
-        components::overline(t(S::Programs, locale), palette),
-        hspace(Length::Fill),
-        text_input(t(S::SearchApps, locale), app.app_search())
-            .on_input(Message::AppSearchChanged)
-            .padding([9, 14])
-            .size(scale::BODY_SM)
-            .width(Length::Fixed(220.0))
-            .style(move |_, status| theme::field(palette, status)),
-    ]
-    .align_y(Alignment::Center);
+    // Both columns open with a band of the same height, so ПРОГРАММЫ and
+    // ПРАВИЛА share a line. Left to size themselves, this one is as tall as the
+    // search field and the other as tall as a caption, and the two headings sit
+    // ten pixels apart.
+    let head = container(
+        row![
+            components::overline(t(S::Programs, locale), palette),
+            hspace(Length::Fill),
+            text_input(t(S::SearchApps, locale), app.app_search())
+                .on_input(Message::AppSearchChanged)
+                .padding([9, 14])
+                .size(scale::BODY_SM)
+                .width(Length::Fixed(220.0))
+                .style(move |_, status| theme::field(palette, status)),
+        ]
+        .align_y(Alignment::Center),
+    )
+    .center_y(Length::Fixed(COLUMN_HEAD));
 
     let matching: Vec<_> = app
         .apps()
@@ -89,8 +100,8 @@ fn programs(app: &Moonlight) -> iced::widget::Column<'_, Message> {
             let running = app.is_running(&entry.executable);
 
             let mut title = row![text(entry.name.clone())
-                .size(scale::BODY)
-                .font(moonlight_design::ui(EMPHATIC))
+                .size(14.5)
+                .font(moonlight_design::ui(ROW_TITLE))
                 .color(palette.text)]
             .spacing(8)
             .align_y(Alignment::Center);
@@ -102,8 +113,20 @@ fn programs(app: &Moonlight) -> iced::widget::Column<'_, Message> {
                 ));
             }
 
+            // The programme's own icon where Windows has one, and the lettered
+            // tile where it does not — a hole in the row would read as a broken
+            // layout rather than as a missing icon.
+            let tile: Element<'_, Message> = match app.app_icon(&entry.executable) {
+                Some(handle) => iced::widget::image(handle.clone())
+                    .width(Length::Fixed(42.0))
+                    .height(Length::Fixed(42.0))
+                    .into(),
+                None => components::letter_tile(&entry.name, &entry.executable, palette),
+            };
+
             list = list.push(
                 row![
+                    tile,
                     column![
                         title,
                         // The executable, because that is what a PROCESS-NAME
@@ -111,14 +134,15 @@ fn programs(app: &Moonlight) -> iced::widget::Column<'_, Message> {
                         // name hides what the rule is made of.
                         text(entry.executable.clone())
                             .font(moonlight_design::mono())
-                            .size(scale::META)
+                            .size(12.0)
                             .color(palette.text_muted),
                     ]
-                    .spacing(2),
-                    hspace(Length::Fill),
+                    .spacing(1)
+                    .width(Length::Fill),
                     components::toggle(on, Message::ToggleApp(entry.executable.clone()), palette),
                 ]
-                .padding([10, 12])
+                .spacing(14)
+                .padding([13, 18])
                 .align_y(Alignment::Center),
             );
         }
@@ -138,9 +162,11 @@ fn rules(app: &Moonlight) -> iced::widget::Column<'_, Message> {
     let kinds: Vec<Kind> = Kind::ALL.to_vec();
     let composer = column![
         pick_list(kinds, Some(app.rule_kind()), Message::RuleKindChanged)
-            .padding([8, 12])
+            .padding([12, 14])
             .text_size(scale::BODY_SM)
-            .width(Length::Fill),
+            .width(Length::Fill)
+            .style(move |_, status| theme::picker(palette, status))
+            .menu_style(move |_| theme::picker_menu(palette)),
         row![
             text_input(app.rule_kind().placeholder(), app.rule_value())
                 .on_input(Message::RuleValueChanged)
@@ -211,7 +237,8 @@ fn rules(app: &Moonlight) -> iced::widget::Column<'_, Message> {
     }
 
     column![
-        components::overline(t(S::RulesHeading, locale), palette),
+        container(components::overline(t(S::RulesHeading, locale), palette))
+            .center_y(Length::Fixed(COLUMN_HEAD)),
         vspace(Length::Fixed(12.0)),
         components::surface(panel, palette),
         vspace(Length::Fixed(10.0)),
