@@ -114,11 +114,19 @@ fn dial_column(app: &Moonlight) -> Element<'_, Message> {
         ]
         .spacing(7)
         .align_y(Alignment::Center),
-        text(t(action, locale))
-            .font(moonlight_design::display())
-            .size(BIG_LABEL)
-            .line_height(line::TIGHT)
-            .color(dim(palette.text)),
+        // Kept inside the ring. "Подключение…" at 26px is wider than the dial's
+        // usable width, and ran out over both edges of the circle; the label is
+        // given the chord to live in and shrinks to fit rather than overflowing.
+        container(
+            text(t(action, locale))
+                .font(moonlight_design::display())
+                .size(BIG_LABEL)
+                .line_height(line::TIGHT)
+                .align_x(Alignment::Center)
+                .color(dim(palette.text)),
+        )
+        .width(Length::Fixed(DIAL * 0.74))
+        .align_x(Alignment::Center),
         text(format::duration(app.uptime()))
             .font(moonlight_design::mono())
             .size(15.0)

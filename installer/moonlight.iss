@@ -79,7 +79,13 @@ Name: "{autodesktop}\{#AppName}";  Filename: "{app}\{#AppExe}"; Tasks: desktopic
 
 [Run]
 ; Registered from the elevated installer, so the user is not asked twice.
-Filename: "{app}\{#HelperExe}"; Parameters: "--install"; StatusMsg: "{cm:RegisteringService}"; Flags: runhidden waituntilterminated; Tasks: tunservice
+;
+; The exit code is checked. It was ignored, so a `--install` that registered the
+; service and then failed to start it finished the install silently and left TUN
+; broken until the next reboot — which is exactly what happened on a second
+; install, where creating an already-existing service failed before the line
+; that starts it.
+Filename: "{app}\{#HelperExe}"; Parameters: "--install"; StatusMsg: "{cm:RegisteringService}"; Flags: runhidden waituntilterminated; Tasks: tunservice; AfterInstall: CheckServiceInstalled
 Filename: "{app}\{#AppExe}"; Description: "{cm:LaunchProgram,{#AppName}}"; Flags: nowait postinstall skipifsilent
 
 [UninstallRun]
@@ -92,3 +98,20 @@ en.InstallTunService=Install the TUN helper service (needed for TUN mode)
 ru.InstallTunService=Установить службу для режима TUN
 en.RegisteringService=Registering the TUN helper service...
 ru.RegisteringService=Регистрация службы TUN...
+en.ServiceFailed=The TUN helper service could not be started. Everything else is installed and system-proxy mode will work; turn TUN on from Settings to try again.
+ru.ServiceFailed=Не удалось запустить службу TUN. Всё остальное установлено, режим системного прокси работает; включите TUN в настройках, чтобы попробовать снова.
+
+[Code]
+{ Inno ignores a [Run] entry's exit code, so a helper that registered the
+  service but could not start it used to finish the install silently. Saying so
+  is the difference between "TUN does not work" and "TUN does not work *and
+  nobody mentioned it*". It is a warning rather than a failed install: the rest
+  of the app is fine without the service. }
+procedure CheckServiceInstalled();
+var
+  ResultCode: Integer;
+begin
+  if not Exec(ExpandConstant('{sys}\sc.exe'), 'query MoonlightHelper', '',
+              SW_HIDE, ewWaitUntilTerminated, ResultCode) or (ResultCode <> 0) then
+    MsgBox(ExpandConstant('{cm:ServiceFailed}'), mbError, MB_OK);
+end;

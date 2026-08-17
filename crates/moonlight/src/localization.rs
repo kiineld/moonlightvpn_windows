@@ -49,7 +49,10 @@ strings! {
     // "Защищено", not "Подключено": the dial reports what you have rather than
     // what happened, which is the composition's wording.
     StateSecure     => "Защищено"           / "Secure",
-    Connection      => "Соединение"         / "Connected",
+    // The dial's big label while the tunnel is up. "Соединение" is a noun that
+    // reads as *connecting*, which is the one thing it is not; the macOS client
+    // says "Подключено" and it is the state, not the act.
+    Connection      => "Подключено"         / "Connected",
     StateConnected  => "ПОДКЛЮЧЕНО"         / "CONNECTED",
     StateDisconnected => "ОТКЛЮЧЕНО"        / "DISCONNECTED",
     StateFailed     => "ОШИБКА"             / "FAILED",

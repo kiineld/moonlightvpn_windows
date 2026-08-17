@@ -334,7 +334,9 @@ impl Moonlight {
             app,
             Task::batch([
                 Task::perform(scan_apps(), Message::AppsScanned),
-                Task::perform(check_helper(), Message::HelperChanged),
+                // Started, not merely checked: the service is on-demand now, so
+                // it comes up with the app and goes down with it.
+                Task::perform(start_helper(), Message::HelperChanged),
             ]),
         )
     }
@@ -1083,10 +1085,30 @@ async fn scan_running() -> Vec<String> {
         .unwrap_or_default()
 }
 
+/// TUN needs the service **running**, not merely registered: the pipe only
+/// exists while it is up, and a stopped service produced a connect that failed
+/// with a bare "cannot find the file" from the pipe open.
 async fn check_helper() -> bool {
-    tokio::task::spawn_blocking(moonlight_core::helper::is_installed)
+    tokio::task::spawn_blocking(moonlight_core::helper::is_running)
         .await
         .unwrap_or(false)
+}
+
+/// Brings the service up alongside the app.
+///
+/// It is registered on-demand and the signed-in user is granted start rights at
+/// install, so this needs no prompt. A service that is not registered at all
+/// simply reports false, which is the "press Установить службу" state.
+async fn start_helper() -> bool {
+    tokio::task::spawn_blocking(|| {
+        if moonlight_core::helper::is_installed() {
+            moonlight_core::helper::start()
+        } else {
+            false
+        }
+    })
+    .await
+    .unwrap_or(false)
 }
 
 /// Installing the service needs elevation, so it is a UAC prompt on the helper's
