@@ -9,6 +9,29 @@
 # config references a geosite:/geoip: rule, which every panel config does. That
 # costs one download on first connect and saves ~24 MB in the installer.
 $ErrorActionPreference = 'Stop'
+
+# See fetch-fonts.ps1: a shared runner can arrive already rate-limited, and a
+# 429 on the first attempt says nothing about this build.
+function Get-Remote($url, $out) {
+    $headers = @{ 'User-Agent' = 'moonlight-build' }
+    if ($env:GITHUB_TOKEN -and $url -like '*github*') {
+        $headers['Authorization'] = "Bearer $($env:GITHUB_TOKEN)"
+    }
+    $delays = @(0, 3, 8, 20, 45)
+    for ($i = 0; $i -lt $delays.Count; $i++) {
+        if ($delays[$i] -gt 0) {
+            Write-Host "  retrying in $($delays[$i])s"
+            Start-Sleep -Seconds $delays[$i]
+        }
+        try {
+            Get-Remote $url $out -Headers $headers -UseBasicParsing
+            return
+        } catch {
+            Write-Host "  $($_.Exception.Message)"
+            if ($i -eq $delays.Count - 1) { throw }
+        }
+    }
+}
 Set-Location (Join-Path $PSScriptRoot '..')
 New-Item -ItemType Directory -Force -Path resources\mihomo | Out-Null
 

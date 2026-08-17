@@ -36,6 +36,8 @@ jobs:
 
       - name: Build
         run: .\scripts\build.ps1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       # Signing is a no-op unless a certificate is configured. Without it
       # SmartScreen warns on first run — that needs a code-signing certificate

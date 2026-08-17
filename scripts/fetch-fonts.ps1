@@ -11,9 +11,36 @@ if ($LASTEXITCODE -ne 0) {
 
 $base = 'https://raw.githubusercontent.com/google/fonts/main/ofl'
 
+# Downloads with backoff.
+#
+# raw.githubusercontent.com rate-limits by IP, and a shared CI runner can arrive
+# already throttled by somebody else's job — a 429 on the first attempt says
+# nothing about this build. GITHUB_TOKEN, when the workflow provides one, raises
+# the limit well clear of it.
+function Get-Remote($url, $out) {
+    if (Test-Path $out) { Write-Host "have $(Split-Path $out -Leaf)"; return }
+    $headers = @{ 'User-Agent' = 'moonlight-build' }
+    if ($env:GITHUB_TOKEN) { $headers['Authorization'] = "Bearer $($env:GITHUB_TOKEN)" }
+
+    $delays = @(0, 3, 8, 20, 45)
+    for ($i = 0; $i -lt $delays.Count; $i++) {
+        if ($delays[$i] -gt 0) {
+            Write-Host "  retrying in $($delays[$i])s"
+            Start-Sleep -Seconds $delays[$i]
+        }
+        try {
+            Write-Host "fetching $(Split-Path $out -Leaf)"
+            Invoke-WebRequest -Uri $url -OutFile $out -Headers $headers -UseBasicParsing
+            return
+        } catch {
+            Write-Host "  $($_.Exception.Message)"
+            if ($i -eq $delays.Count - 1) { throw }
+        }
+    }
+}
+
 function Get-Variable-Font($url, $name) {
-    $out = "build\fonts\$name"
-    if (-not (Test-Path $out)) { Write-Host "fetching $name"; Invoke-WebRequest -Uri $url -OutFile $out }
+    Get-Remote $url "build\fonts\$name"
 }
 
 function New-Instance($source, $weight, $name) {

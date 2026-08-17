@@ -65,6 +65,10 @@ jobs:
         run: |
           .\scripts\fetch-fonts.ps1
           .\scripts\fetch-mihomo.ps1
+        env:
+          # Raises raw.githubusercontent.com's per-IP rate limit, which a shared
+          # runner can arrive already over.
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - run: cargo build --workspace
 
