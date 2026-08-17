@@ -32,16 +32,26 @@ const MARK_RADIUS: f32 = 10.0;
 /// advertised nothing.
 const COLLAPSE: f32 = 30.0;
 
+/// Where the rail swaps between its two layouts, mid-glide.
+///
+/// The layout follows the *drawn width*, not the target state. Switching on the
+/// boolean put the full sidebar — wordmark, labels, quota card — inside a box
+/// still 72px wide for the length of the animation: everything wrapped, the
+/// column grew, and the contents jumped up and then back down as the box caught
+/// up. Swapping at the halfway point means neither layout is ever drawn into a
+/// box too small for it.
+const LAYOUT_SWAP: f32 = (metrics::RAIL + metrics::RAIL_COLLAPSED) / 2.0;
+
 pub fn view<'a>(
     palette: Palette,
     locale: AppLocale,
     current: Page,
-    collapsed: bool,
     // The rail's current width, which is mid-glide while it opens or closes.
     width: f32,
     preferences: &'a Preferences,
     info: &'a SubscriptionInfo,
 ) -> Element<'a, Message> {
+    let collapsed = width < LAYOUT_SWAP;
     let pad_x = if collapsed { 10.0 } else { 14.0 };
 
     let mut items = column![].spacing(6);
@@ -235,14 +245,14 @@ fn quota<'a>(
         } else {
             palette.danger
         };
-        return button(
+        return button(components::centre(
             column![
                 icon(Icon::Sparkles, 16.0, tone),
                 container(components::bar(used, palette, 4.0)).width(Length::Fixed(34.0)),
             ]
             .spacing(6)
             .align_x(Alignment::Center),
-        )
+        ))
         .on_press(Message::Navigate(Page::Subscription))
         .padding([12, 0])
         .width(Length::Fill)

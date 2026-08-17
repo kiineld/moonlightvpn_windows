@@ -50,6 +50,7 @@ ArchitecturesInstallIn64BitMode=x64compatible
 ; 1809 is the floor the README states, and matches what wintun and the core need.
 MinVersion=10.0.17763
 UninstallDisplayIcon={app}\{#AppExe}
+SetupIconFile=..\crates\moonlight\assets\moonlight.ico
 ; Setup can neither replace nor delete a running executable. Inno detects the
 ; files in use and offers to close the app, which is a far better failure than
 ; a "file in use" dialog halfway through copying.

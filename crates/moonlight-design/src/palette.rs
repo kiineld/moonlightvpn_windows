@@ -249,6 +249,99 @@ impl Palette {
         telegram_blue: hex(0x29A0DA),
     };
 
+    /// A palette part-way between two others, for the theme cross-fade.
+    ///
+    /// Every field is interpolated, including the washes and hairlines — a
+    /// half-faded theme that kept the old hairlines would show the seams of the
+    /// layout moving between two colour schemes.
+    ///
+    /// Interpolation is in straight sRGB. It is not perceptually uniform, and a
+    /// slow fade between distant hues would show it; over 200ms between two
+    /// palettes that share a structure it is indistinguishable from the right
+    /// answer and costs no colour-space conversion per frame per field.
+    pub fn lerp(from: &Palette, to: &Palette, t: f32) -> Palette {
+        let t = t.clamp(0.0, 1.0);
+        // Pinned rather than trusted to the arithmetic: `a + (b - a) * 1.0` is
+        // not exactly `b` in binary floating point, so a fade left to run its
+        // course would settle a bit-or-two off the theme it was heading for and
+        // stay there for the life of the process.
+        if t == 0.0 {
+            return *from;
+        }
+        if t == 1.0 {
+            return *to;
+        }
+        let mix = |a: Color, b: Color| Color {
+            r: a.r + (b.r - a.r) * t,
+            g: a.g + (b.g - a.g) * t,
+            b: a.b + (b.b - a.b) * t,
+            a: a.a + (b.a - a.a) * t,
+        };
+
+        macro_rules! blend {
+            ($($field:ident),+ $(,)?) => {
+                Palette { $($field: mix(from.$field, to.$field)),+ }
+            };
+        }
+
+        blend!(
+            lime,
+            lime_deep,
+            purple,
+            yellow,
+            blue,
+            orange,
+            red,
+            lime_wash,
+            lime_wash_soft,
+            red_wash,
+            ink_wash,
+            ink_wash_soft,
+            hairline,
+            hairline_soft,
+            bg,
+            bg_deep,
+            surface,
+            surface2,
+            surface3,
+            surface_nav,
+            text,
+            text2,
+            text_muted,
+            text_on_accent,
+            text_link,
+            text_link_hover,
+            accent,
+            accent_hover,
+            accent_quiet,
+            accent_ink,
+            accent_ink_strong,
+            accent_line,
+            status_secure,
+            danger,
+            danger_quiet,
+            warning,
+            info,
+            cat1,
+            cat2,
+            cat3,
+            cat4,
+            cat5,
+            hero_gold,
+            st_up,
+            st_up_ink,
+            st_degraded,
+            st_degraded_ink,
+            st_maintenance,
+            st_maintenance_ink,
+            st_partial,
+            st_partial_ink,
+            st_down,
+            st_down_ink,
+            telegram_blue,
+        )
+    }
+
     /// The design keys ping colour off latency, not off a status enum.
     pub fn ping_color(&self, ms: u32) -> Color {
         if ms < 40 {
@@ -314,6 +407,38 @@ mod tests {
         let l = Palette::LIGHT;
         assert_ne!(l.accent, l.accent_ink);
         assert_ne!(l.accent_ink, l.accent_ink_strong);
+    }
+
+    #[test]
+    fn a_lerp_lands_exactly_on_its_endpoints() {
+        // Anything else leaves the theme fractionally wrong once the fade ends,
+        // for as long as the app stays open.
+        assert_eq!(Palette::lerp(&Palette::DARK, &Palette::LIGHT, 0.0), Palette::DARK);
+        assert_eq!(Palette::lerp(&Palette::DARK, &Palette::LIGHT, 1.0), Palette::LIGHT);
+    }
+
+    #[test]
+    fn a_lerp_is_clamped_outside_the_unit_range() {
+        assert_eq!(Palette::lerp(&Palette::DARK, &Palette::LIGHT, -3.0), Palette::DARK);
+        assert_eq!(Palette::lerp(&Palette::DARK, &Palette::LIGHT, 9.0), Palette::LIGHT);
+    }
+
+    #[test]
+    fn a_half_lerp_sits_between_the_two_backgrounds() {
+        // #101828 to #F2F3ED: the midpoint must be neither end.
+        let middle = Palette::lerp(&Palette::DARK, &Palette::LIGHT, 0.5);
+        assert!(middle.bg.r > Palette::DARK.bg.r);
+        assert!(middle.bg.r < Palette::LIGHT.bg.r);
+    }
+
+    #[test]
+    fn a_lerp_carries_the_translucent_tokens_too() {
+        // The washes and hairlines have alphas below 1; a blend that only moved
+        // the colour channels would hold the old theme's seams through the fade.
+        let middle = Palette::lerp(&Palette::DARK, &Palette::LIGHT, 0.5);
+        let (dark, light) = (Palette::DARK.hairline, Palette::LIGHT.hairline);
+        assert!(dark.a < 1.0 && light.a < 1.0);
+        assert!((middle.hairline.a - (dark.a + light.a) / 2.0).abs() < 1e-6);
     }
 
     #[test]

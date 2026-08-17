@@ -47,15 +47,15 @@ pub const RELEASES_API: &str = match option_env!("RELEASES_API") {
 };
 pub const TELEGRAM_BOT_URL: &str = match option_env!("TELEGRAM_BOT_URL") {
     Some(url) => url,
-    None => "https://t.me/moonlightvpn_bot",
+    None => "https://t.me/the_moonlight_vpn_bot",
 };
 pub const TELEGRAM_CHANNEL_URL: &str = match option_env!("TELEGRAM_CHANNEL_URL") {
     Some(url) => url,
-    None => "https://t.me/moonlightvpn",
+    None => "https://t.me/moonlight_vpn_channel",
 };
 pub const SUPPORT_URL: &str = match option_env!("SUPPORT_URL") {
     Some(url) => url,
-    None => "https://t.me/moonlightvpn_support",
+    None => "https://t.me/moonlight_vps",
 };
 
 /// The controller's channels, handed over to the subscription once.
@@ -294,6 +294,9 @@ pub struct Moonlight {
     page_started: Option<Instant>,
     /// When the rail last started opening or closing, for its width glide.
     sidebar_started: Option<Instant>,
+    /// When the theme last changed, and the colours it was showing at the time.
+    theme_started: Option<Instant>,
+    previous_palette: Option<Palette>,
     /// Off in tests, so preference changes stay in memory.
     persist: bool,
 }
@@ -368,6 +371,8 @@ impl Moonlight {
             // being simply present when the window appears.
             page_started: Some(Instant::now()),
             sidebar_started: None,
+            theme_started: None,
+            previous_palette: None,
             persist: true,
         }
     }
@@ -393,7 +398,22 @@ impl Moonlight {
         self.preferences.locale
     }
 
+    /// The palette the app is currently painting with — part-way between the
+    /// old and new themes while a switch is in flight.
     fn palette(&self) -> Palette {
+        let target = self.target_palette();
+        let Some(started) = self.theme_started else {
+            return target;
+        };
+        let Some(previous) = self.previous_palette else {
+            return target;
+        };
+        let linear = motion::progress(started.elapsed(), dur::PAINT);
+        Palette::lerp(&previous, &target, Curve::EASE.at(linear))
+    }
+
+    /// Where the theme is heading, ignoring any fade in progress.
+    fn target_palette(&self) -> Palette {
         let appearance = match self.preferences.appearance.as_deref() {
             Some("dark") => Appearance::Dark,
             Some("light") => Appearance::Light,
@@ -445,7 +465,9 @@ impl Moonlight {
         let running = |started: Option<Instant>, duration: Duration| {
             started.is_some_and(|at| at.elapsed() < duration)
         };
-        running(self.page_started, dur::ENTER) || running(self.sidebar_started, dur::SLIDE)
+        running(self.page_started, dur::ENTER)
+            || running(self.sidebar_started, dur::SLIDE)
+            || running(self.theme_started, dur::PAINT)
     }
 
     fn transition_progress(&self) -> f32 {
@@ -472,6 +494,10 @@ impl Moonlight {
                 self.save();
             }
             Message::CycleAppearance => {
+                // Where the colours are *now*, which is not necessarily the old
+                // theme: pressing the button twice quickly has to fade on from
+                // the half-blended palette rather than snapping back first.
+                self.previous_palette = Some(self.palette());
                 // System → dark → light → system, which is the order the macOS
                 // client's sun button cycles in.
                 self.preferences.appearance = match self.preferences.appearance.as_deref() {
@@ -479,6 +505,7 @@ impl Moonlight {
                     Some("dark") => Some("light".into()),
                     _ => None,
                 };
+                self.theme_started = Some(Instant::now());
                 self.save();
             }
             Message::SetLocale(locale) => {
@@ -831,7 +858,6 @@ impl Moonlight {
                 palette,
                 locale,
                 self.page.rail_item(),
-                self.sidebar_collapsed,
                 self.sidebar_width(),
                 &self.preferences,
                 &self.info,

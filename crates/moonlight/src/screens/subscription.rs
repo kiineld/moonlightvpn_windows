@@ -65,12 +65,6 @@ fn plan_card(app: &Moonlight) -> Element<'_, Message> {
         .spacing(2)
     };
 
-    let devices = match (info.devices_used, info.device_limit) {
-        (Some(used), Some(limit)) => format!("{used} / {limit}"),
-        (None, Some(limit)) => format!("— / {limit}"),
-        _ => t(S::Unknown, locale).to_string(),
-    };
-
     let (status_label, status_fill) = if info.is_active() {
         (t(S::Active, locale), palette.text_on_accent)
     } else {
@@ -96,10 +90,11 @@ fn plan_card(app: &Moonlight) -> Element<'_, Message> {
         .size(scale::HERO)
         .color(palette.text_on_accent),
         vspace(Length::Fixed(6.0)),
+        // No device count: Remnawave does not report one on every plan, so the
+        // figure was usually a dash sitting between two real numbers.
         row![
             stat(S::Remaining, format::time_left(info.expire, locale)),
             stat(S::Traffic, format::bytes(info.used(), locale)),
-            stat(S::Devices, devices),
         ]
         .spacing(26),
     ]

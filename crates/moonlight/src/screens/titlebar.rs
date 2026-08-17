@@ -85,7 +85,10 @@ pub fn view(app: &Moonlight) -> Element<'_, Message> {
                 .align_y(Alignment::Center)
                 .width(Length::Fill),
         )
-        .height(Length::Fill),
+        // `center_y`, not `height`: filling the bar's height only makes the
+        // region tall enough to grab, and leaves the wordmark against its top
+        // edge. Same trap as the page header.
+        .center_y(Length::Fill),
     )
     .on_press(Message::DragWindow);
 
