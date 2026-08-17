@@ -5,5 +5,8 @@ resources/fonts/*.ttf
 resources/fonts/*.otf
 resources/mihomo/mihomo.exe
 resources/mihomo/wintun.dll
+# Written by fetch-mihomo.ps1 beside the core it stamps, so it is as much a
+# build artifact as the binaries above.
+resources/mihomo/VERSION
 *.pdb
 .DS_Store

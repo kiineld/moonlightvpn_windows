@@ -17,10 +17,18 @@ $base = 'https://raw.githubusercontent.com/google/fonts/main/ofl'
 # already throttled by somebody else's job — a 429 on the first attempt says
 # nothing about this build. GITHUB_TOKEN, when the workflow provides one, raises
 # the limit well clear of it.
+# Both font files are named `Family[wght].ttf`, and Windows PowerShell 5.1 runs
+# -OutFile through the provider's *wildcard* path resolution, where `[wght]` is a
+# character class that matches nothing — the download dies with "Unable to find
+# the specified file". PowerShell 7 treats -OutFile literally, which is why CI
+# (whose `run:` steps default to pwsh) never saw this. Downloading to a
+# bracket-free temporary name and renaming with -LiteralPath works on both.
 function Get-Remote($url, $out) {
-    if (Test-Path $out) { Write-Host "have $(Split-Path $out -Leaf)"; return }
+    if (Test-Path -LiteralPath $out) { Write-Host "have $(Split-Path $out -Leaf)"; return }
     $headers = @{ 'User-Agent' = 'moonlight-build' }
     if ($env:GITHUB_TOKEN) { $headers['Authorization'] = "Bearer $($env:GITHUB_TOKEN)" }
+
+    $temp = Join-Path (Split-Path $out -Parent) ("dl-" + [guid]::NewGuid().ToString('N') + ".tmp")
 
     $delays = @(0, 3, 8, 20, 45)
     for ($i = 0; $i -lt $delays.Count; $i++) {
@@ -30,10 +38,12 @@ function Get-Remote($url, $out) {
         }
         try {
             Write-Host "fetching $(Split-Path $out -Leaf)"
-            Invoke-WebRequest -Uri $url -OutFile $out -Headers $headers -UseBasicParsing
+            Invoke-WebRequest -Uri $url -OutFile $temp -Headers $headers -UseBasicParsing
+            Move-Item -LiteralPath $temp -Destination $out -Force
             return
         } catch {
             Write-Host "  $($_.Exception.Message)"
+            Remove-Item -LiteralPath $temp -Force -ErrorAction SilentlyContinue
             if ($i -eq $delays.Count - 1) { throw }
         }
     }

@@ -1,27 +1,47 @@
-//! The app mark: a crescent and a star on a lime rounded square.
+//! The app mark: a crescent moon with two stars on an accent rounded square.
 //!
 //! Drawn rather than embedded as an image, for the same reason the icons are
-//! path data — it has to be the right lime in both themes, and it has to stay
-//! sharp on a 200% display without shipping four raster sizes. The geometry is
-//! in a 40×40 box and scales to whatever the canvas is given.
+//! path data — it has to take the accent in both themes (lime on dark, yellow on
+//! light) and stay sharp on a 200% display without shipping four raster sizes.
+//!
+//! The geometry is `assets/logo-tile.svg` verbatim, in its own 44×44 view box,
+//! and is the same path the macOS client draws. It is not redrawn by eye: an
+//! earlier pass here approximated the crescent as two overlapping circles with a
+//! four-pointed sparkle beside it, which is a different mark — the products
+//! stopped looking like the same product.
 
 use iced::widget::canvas::{self, Cache, Geometry, Path};
-use iced::{mouse, Point, Rectangle, Renderer, Theme};
+use iced::{mouse, Point, Rectangle, Renderer, Size, Theme};
 
-use moonlight_design::Palette;
+use moonlight_design::{Palette, SvgPath};
 
-/// The box the geometry below is expressed in.
-const BOX: f32 = 40.0;
+/// The view box the geometry below is expressed in.
+const VIEW_BOX: f32 = 44.0;
+
+/// The crescent. Its bite is part of the path rather than a knocked-out disc, so
+/// it composites correctly on any slab colour.
+const CRESCENT: &str = "M30 22a8.4 8.4 0 1 1-9.4-8.34A10 10 0 0 0 30 22Z";
+
+/// The two stars, as centre/radius in the same 44×44 space.
+const STARS: [(f32, f32, f32); 2] = [(30.5, 12.5, 1.7), (25.0, 8.0, 1.1)];
 
 pub struct Logo {
     palette: Palette,
+    /// The slab's corner radius, in the *rendered* size — 10 at 32pt in the
+    /// sidebar, 5 at 18pt in the title bar.
+    radius: f32,
     cache: Cache,
 }
 
 impl Logo {
     pub fn new(palette: Palette) -> Self {
+        Logo::with_radius(palette, 10.0)
+    }
+
+    pub fn with_radius(palette: Palette, radius: f32) -> Self {
         Logo {
             palette,
+            radius,
             cache: Cache::new(),
         }
     }
@@ -43,47 +63,26 @@ impl<Message> canvas::Program<Message> for Logo {
             if size <= 0.0 {
                 return;
             }
-            let scale = size / BOX;
-            let at = |x: f32, y: f32| Point::new(x * scale, y * scale);
+            let scale = size / VIEW_BOX;
 
-            // The lime slab. A generous radius, because the mark sits beside
-            // 19px display type and a tight corner reads as a button.
             let slab = Path::rounded_rectangle(
                 Point::ORIGIN,
-                iced::Size::new(size, size),
-                (11.0 * scale).into(),
+                Size::new(size, size),
+                self.radius.min(size / 2.0).into(),
             );
             frame.fill(&slab, self.palette.accent);
 
-            // The crescent: a filled disc with a second disc knocked out of it.
-            // Drawn as one path with two circles and the even-odd rule, so the
-            // bite is transparent rather than painted in the slab's colour —
-            // which would go wrong the moment the slab is not flat.
-            let crescent = Path::new(|b| {
-                b.circle(at(17.5, 21.0), 11.0 * scale);
-                b.circle(at(24.0, 15.5), 9.5 * scale);
-            });
+            let ink = self.palette.text_on_accent;
+            let box_rect = Rectangle::new(Point::ORIGIN, Size::new(size, size));
             frame.fill(
-                &crescent,
-                canvas::Fill {
-                    style: canvas::Style::Solid(self.palette.text_on_accent),
-                    rule: canvas::fill::Rule::EvenOdd,
-                },
+                &SvgPath::parse(CRESCENT).to_canvas_path(box_rect, VIEW_BOX),
+                ink,
             );
 
-            // The star, as a four-pointed sparkle rather than a five-pointed
-            // star: it reads at 24px, where a five-pointer turns to mush.
-            let star = Path::new(|b| {
-                let (cx, cy) = (28.5_f32, 27.5_f32);
-                let (outer, inner) = (5.2_f32, 1.5_f32);
-                b.move_to(at(cx, cy - outer));
-                b.quadratic_curve_to(at(cx + inner, cy - inner), at(cx + outer, cy));
-                b.quadratic_curve_to(at(cx + inner, cy + inner), at(cx, cy + outer));
-                b.quadratic_curve_to(at(cx - inner, cy + inner), at(cx - outer, cy));
-                b.quadratic_curve_to(at(cx - inner, cy - inner), at(cx, cy - outer));
-                b.close();
-            });
-            frame.fill(&star, self.palette.text_on_accent);
+            for (cx, cy, r) in STARS {
+                let star = Path::new(|b| b.circle(Point::new(cx * scale, cy * scale), r * scale));
+                frame.fill(&star, ink);
+            }
         });
 
         vec![geometry]

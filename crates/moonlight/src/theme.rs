@@ -7,7 +7,7 @@
 //! text-input caret and selection colours are sane, but nothing else reads it.
 
 use iced::border::Radius;
-use iced::widget::{button, container, scrollable, text_input};
+use iced::widget::{button, container, overlay, pick_list, scrollable, text_input};
 use iced::{Background, Border, Color, Shadow, Theme, Vector};
 
 use moonlight_design::motion::{border, radii};
@@ -233,6 +233,47 @@ pub fn field(palette: Palette, status: text_input::Status) -> text_input::Style 
         placeholder: palette.text_muted,
         value: palette.text,
         selection: alpha(palette.accent, 0.28),
+    }
+}
+
+/// The rule-kind dropdown.
+///
+/// Without an explicit style iced falls back to whatever `Theme` the application
+/// carries — which is `Theme::Dark` here, purely so the text-input caret is sane.
+/// That painted a near-black slab with white type in the middle of a near-white
+/// panel: the one control on the page that belonged to a different application.
+pub fn picker(palette: Palette, status: pick_list::Status) -> pick_list::Style {
+    let border_color = match status {
+        pick_list::Status::Hovered | pick_list::Status::Opened { .. } => palette.accent_line,
+        _ => palette.hairline,
+    };
+    pick_list::Style {
+        text_color: palette.text,
+        placeholder_color: palette.text_muted,
+        handle_color: palette.text_muted,
+        background: Background::Color(palette.surface2),
+        border: Border {
+            radius: Radius::from(radii::FIELD),
+            width: border::HAIRLINE,
+            color: border_color,
+        },
+    }
+}
+
+/// The dropdown's own list, which is a separate surface from the closed control.
+pub fn picker_menu(palette: Palette) -> overlay::menu::Style {
+    overlay::menu::Style {
+        background: Background::Color(palette.surface2),
+        border: Border {
+            radius: Radius::from(radii::FIELD),
+            width: border::HAIRLINE,
+            color: palette.hairline,
+        },
+        text_color: palette.text,
+        selected_text_color: palette.text_on_accent,
+        selected_background: Background::Color(palette.accent),
+        // Flat system: the menu is a lighter surface, not a floated one.
+        shadow: Shadow::default(),
     }
 }
 

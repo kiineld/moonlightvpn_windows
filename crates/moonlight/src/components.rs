@@ -10,10 +10,49 @@ use iced::widget::{button, column, container, row, text, Space};
 use iced::{Alignment, Background, Border, Color, Element, Length};
 
 use moonlight_design::motion::radii;
-use moonlight_design::typography::{scale, EMPHATIC};
+use moonlight_design::typography::{scale, EMPHATIC, ROW_TITLE};
 use moonlight_design::{icon, Icon, Palette};
 
 use crate::theme;
+
+/// A list-row title. The composition sets these at 14.5/700 — a step below
+/// `--ml-t-body` and a weight below the emphatic default, which is what keeps a
+/// stack of settings rows from reading as a stack of buttons.
+const ROW_TITLE_SIZE: f32 = 14.5;
+/// The sub-line under it: 12px, not `--ml-t-meta`.
+const SUB_SIZE: f32 = 12.0;
+
+/// The toggle switch, from the source's own geometry. The knob's travel is
+/// `TOGGLE_W - 2*TOGGLE_INSET - TOGGLE_KNOB`, which must come to the
+/// `translateX(18px)` the composition animates — see the test below.
+const TOGGLE_W: f32 = 44.0;
+const TOGGLE_H: f32 = 26.0;
+const TOGGLE_KNOB: f32 = 20.0;
+const TOGGLE_INSET: f32 = 3.0;
+
+/// The category ramp, in the order the tiles cycle through it.
+fn category_fills(palette: Palette) -> [Color; 5] {
+    [
+        palette.cat1,
+        palette.cat2,
+        palette.cat3,
+        palette.cat4,
+        palette.cat5,
+    ]
+}
+
+/// Which category colour an app row's tile takes.
+///
+/// Keyed off the executable rather than the display name, because that is the
+/// stable identity — a programme that renames itself between releases keeps its
+/// colour, and two builds of the same executable do not drift apart.
+fn tile_fill(executable: &str, palette: Palette) -> Color {
+    let fills = category_fills(palette);
+    let hash = executable
+        .bytes()
+        .fold(0u32, |a, b| a.wrapping_mul(31).wrapping_add(b as u32));
+    fills[(hash % fills.len() as u32) as usize]
+}
 
 /// A section heading: small, muted, letterspaced, upper case.
 ///
@@ -56,17 +95,54 @@ pub fn soft_divider<'a, M: 'a>(palette: Palette) -> Element<'a, M> {
 /// Settings screens use five of them side by side, and making them all lime
 /// would lose the only thing distinguishing one action from the next.
 pub fn tile<'a, M: 'a>(glyph: Icon, fill: Color, ink: Color) -> Element<'a, M> {
-    container(icon(glyph, 20.0, ink))
-        .padding(11)
+    // 42×42 around a 19px glyph, cornered at 13 — the value the composition sets
+    // literally for a tile this size, between `--ml-r-icon` and `--ml-r-icon-lg`.
+    container(icon(glyph, 19.0, ink))
+        .center(Length::Fixed(42.0))
         .style(move |_| container::Style {
             background: Some(Background::Color(fill)),
             border: Border {
-                radius: iced::border::Radius::from(radii::ICON),
+                radius: iced::border::Radius::from(radii::TILE),
                 ..Default::default()
             },
             ..Default::default()
         })
         .into()
+}
+
+/// The 42px tile at the head of an app row: the programme's initial, set in the
+/// display face on a category fill.
+///
+/// The composition hand-picks a colour per application, which a list of whatever
+/// is actually installed cannot do. The fill is chosen by hashing the executable
+/// instead, so a given programme keeps its colour between launches and between
+/// re-scans — a colour that moved every time the inventory was rebuilt would
+/// read as the list re-sorting itself.
+pub fn letter_tile<'a, M: 'a>(name: &str, executable: &str, palette: Palette) -> Element<'a, M> {
+    let letter: String = name
+        .chars()
+        .find(|c| c.is_alphanumeric())
+        .map(|c| c.to_uppercase().to_string())
+        .unwrap_or_else(|| "?".into());
+
+    let fill = tile_fill(executable, palette);
+
+    container(
+        text(letter)
+            .font(moonlight_design::display())
+            .size(17.0)
+            .color(palette.text_on_accent),
+    )
+    .center(Length::Fixed(42.0))
+    .style(move |_| container::Style {
+        background: Some(Background::Color(fill)),
+        border: Border {
+            radius: iced::border::Radius::from(radii::TILE),
+            ..Default::default()
+        },
+        ..Default::default()
+    })
+    .into()
 }
 
 /// A small filled pill — *Активна*, *Запущено*.
@@ -93,12 +169,12 @@ pub fn pill<'a, M: 'a>(label: String, fill: Color, ink: Color) -> Element<'a, M>
 pub fn titled<'a, M: 'a>(title: String, subtitle: String, palette: Palette) -> Element<'a, M> {
     column![
         text(title)
-            .size(scale::BODY)
-            .font(moonlight_design::ui(EMPHATIC))
+            .size(ROW_TITLE_SIZE)
+            .font(moonlight_design::ui(ROW_TITLE))
             .color(palette.text),
-        text(subtitle).size(scale::META).color(palette.text_muted),
+        text(subtitle).size(SUB_SIZE).color(palette.text_muted),
     ]
-    .spacing(1)
+    .spacing(2)
     .into()
 }
 
@@ -118,17 +194,21 @@ pub fn action_row<'a, M: Clone + 'a>(
     on_press: Option<M>,
     palette: Palette,
 ) -> Element<'a, M> {
-    let mut content = row![tile(glyph, fill, ink), titled(title, subtitle, palette)]
-        .spacing(13)
-        .align_y(Alignment::Center);
+    // As in `setting_row`: the label stack fills, so a long sub-line wraps rather
+    // than crowding the trailing glyph off the row.
+    let mut content = row![
+        tile(glyph, fill, ink),
+        container(titled(title, subtitle, palette)).width(Length::Fill)
+    ]
+    .spacing(14)
+    .align_y(Alignment::Center);
 
-    content = content.push(Space::new().width(Length::Fill));
     if let Some(trailing) = trailing {
         content = content.push(icon(trailing, 17.0, palette.text_muted));
     }
 
     let mut element = button(content)
-        .padding([12, 14])
+        .padding([15, 18])
         .width(Length::Fill)
         .style(move |_, status| theme::row_button(palette, false, status));
     if let Some(message) = on_press {
@@ -148,8 +228,8 @@ pub fn toggle<'a, M: Clone + 'a>(on: bool, message: M, palette: Palette) -> Elem
     // The knob is white in both states and both themes: on the accent it is the
     // only thing that reads, and on the empty track it is what says "switch"
     // rather than "empty pill".
-    let knob = container(Space::new().width(Length::Fixed(20.0)))
-        .height(Length::Fixed(20.0))
+    let knob = container(Space::new().width(Length::Fixed(TOGGLE_KNOB)))
+        .height(Length::Fixed(TOGGLE_KNOB))
         .style(|_| container::Style {
             background: Some(Background::Color(Color::WHITE)),
             border: Border {
@@ -167,9 +247,11 @@ pub fn toggle<'a, M: Clone + 'a>(on: bool, message: M, palette: Palette) -> Elem
 
     button(
         container(inner.align_y(Alignment::Center))
-            .width(Length::Fixed(48.0))
-            .height(Length::Fixed(26.0))
-            .padding(3)
+            // 44×26 with a 20px knob and 3px inset — the geometry the source
+            // animates, where the knob's travel is exactly its `translateX(18px)`.
+            .width(Length::Fixed(TOGGLE_W))
+            .height(Length::Fixed(TOGGLE_H))
+            .padding(TOGGLE_INSET)
             .style(move |_| container::Style {
                 background: Some(Background::Color(track_fill)),
                 border: Border {
@@ -197,17 +279,24 @@ pub fn setting_row<'a, M: 'a>(
     palette: Palette,
 ) -> Element<'a, M> {
     let mut labels = column![text(title)
-        .size(scale::BODY)
-        .font(moonlight_design::ui(EMPHATIC))
+        .size(ROW_TITLE_SIZE)
+        .font(moonlight_design::ui(ROW_TITLE))
         .color(palette.text)]
     .spacing(2);
     if let Some(subtitle) = subtitle {
-        labels = labels.push(text(subtitle).size(scale::META).color(palette.text_muted));
+        labels = labels.push(text(subtitle).size(SUB_SIZE).color(palette.text_muted));
     }
 
-    row![labels, Space::new().width(Length::Fill), control]
+    // The labels take the slack, not a spacer beside them. A `Shrink` column
+    // asks for the full intrinsic width of its longest line, which on a row like
+    // *Служба не установлена* leaves nothing for the control: the button
+    // collapses to a sliver and its label spills out past the card. Filling here
+    // resolves after the control's intrinsic width, so the subtitle wraps
+    // instead.
+    row![labels.width(Length::Fill), control]
+        .spacing(14)
         .align_y(Alignment::Center)
-        .padding([14, 16])
+        .padding([15, 18])
         .into()
 }
 
@@ -220,23 +309,58 @@ pub fn segmented<'a, T: Copy + PartialEq + 'a, M: Clone + 'a>(
     on_select: impl Fn(T) -> M + 'a,
     palette: Palette,
 ) -> Element<'a, M> {
-    let mut track = row![].spacing(0);
+    track(options, selected, on_select, palette, 34.0, 12.5, 14.0)
+}
+
+/// The smaller track — the *RU / EN* switch, which the composition sets at 28px
+/// with 12px labels so it sits inside a settings row without setting its height.
+pub fn segmented_compact<'a, T: Copy + PartialEq + 'a, M: Clone + 'a>(
+    options: &[(T, &'a str)],
+    selected: T,
+    on_select: impl Fn(T) -> M + 'a,
+    palette: Palette,
+) -> Element<'a, M> {
+    track(options, selected, on_select, palette, 28.0, 12.0, 13.0)
+}
+
+/// The segmented track both sizes are cut from.
+///
+/// Surface-2 with **no border** and 3px of padding, per the composition. Giving
+/// it the panel surface and a hairline — as an earlier pass did — draws a second
+/// bordered box inside a bordered card, which is what made the language switch
+/// read as a nested panel rather than as a control.
+fn track<'a, T: Copy + PartialEq + 'a, M: Clone + 'a>(
+    options: &[(T, &'a str)],
+    selected: T,
+    on_select: impl Fn(T) -> M + 'a,
+    palette: Palette,
+    height: f32,
+    size: f32,
+    pad_x: f32,
+) -> Element<'a, M> {
+    let mut segments = row![].spacing(3);
     for (value, label) in options {
         let is_selected = *value == selected;
+        // Unselected labels take `text-muted`, not `text-2`: the track already
+        // sits on a lighter surface, and text-2 there reads as a second
+        // selection.
         let ink = if is_selected {
             palette.text_on_accent
         } else {
-            palette.text2
+            palette.text_muted
         };
-        track = track.push(
+        segments = segments.push(
             button(
-                text(*label)
-                    .size(scale::BODY_SM)
-                    .font(moonlight_design::ui(EMPHATIC))
-                    .color(ink),
+                container(
+                    text(*label)
+                        .size(size)
+                        .font(moonlight_design::ui(EMPHATIC))
+                        .color(ink),
+                )
+                .center_y(Length::Fixed(height)),
             )
             .on_press(on_select(*value))
-            .padding([9, 18])
+            .padding([0.0, pad_x])
             .style(move |_, status| {
                 if is_selected {
                     theme::accent_button(palette, status)
@@ -255,14 +379,13 @@ pub fn segmented<'a, T: Copy + PartialEq + 'a, M: Clone + 'a>(
         );
     }
 
-    container(track)
-        .padding(4)
+    container(segments)
+        .padding(3)
         .style(move |_| container::Style {
-            background: Some(Background::Color(palette.surface)),
+            background: Some(Background::Color(palette.surface2)),
             border: Border {
                 radius: iced::border::Radius::from(radii::PILL),
-                width: 1.0,
-                color: palette.hairline,
+                ..Default::default()
             },
             ..Default::default()
         })
@@ -313,7 +436,7 @@ pub fn bar<'a, M: 'a>(fraction: f32, palette: Palette, height: f32) -> Element<'
 /// A card: surface, rounded, padded.
 pub fn card<'a, M: 'a>(content: impl Into<Element<'a, M>>, palette: Palette) -> Element<'a, M> {
     container(content)
-        .padding(16)
+        .padding(moonlight_design::motion::metrics::PAD_CARD)
         .width(Length::Fill)
         .style(move |_| theme::card(palette))
         .into()
@@ -337,8 +460,203 @@ pub fn empty_state<'a, M: 'a>(message: &'a str, palette: Palette) -> Element<'a,
         .into()
 }
 
+/// Centres a button's label in a button whose height is set explicitly.
+///
+/// iced lays a `button`'s content out at the **top** of its content box, so a
+/// 44pt nav row or a 38pt pill puts its label against the upper edge with all
+/// the slack below — which is what made every control in the app sit high in its
+/// own pill. Only buttons that size themselves from their padding are exempt.
+pub fn centre<'a, M: 'a>(content: impl Into<Element<'a, M>>) -> Element<'a, M> {
+    container(content).center_y(Length::Fill).into()
+}
+
+/// A count chip on the accent wash — *Активно: 0*.
+pub fn count_pill<'a, M: 'a>(label: String, palette: Palette) -> Element<'a, M> {
+    container(
+        text(label)
+            .size(scale::META)
+            .font(moonlight_design::ui(EMPHATIC))
+            .color(palette.accent_ink),
+    )
+    .padding([0, 12])
+    .height(Length::Fixed(30.0))
+    .align_y(Alignment::Center)
+    .style(move |_| container::Style {
+        background: Some(Background::Color(palette.accent_quiet)),
+        border: Border {
+            radius: iced::border::Radius::from(radii::PILL),
+            ..Default::default()
+        },
+        ..Default::default()
+    })
+    .into()
+}
+
+/// A glyph over one muted line, centred — the empty state for a panel where
+/// there is nothing the user can usefully do yet.
+pub fn empty_state_icon<'a, M: 'a>(
+    glyph: Icon,
+    message: &'a str,
+    palette: Palette,
+) -> Element<'a, M> {
+    container(
+        column![
+            icon(glyph, 30.0, palette.text_muted),
+            text(message)
+                .size(scale::META)
+                .color(palette.text_muted)
+                .align_x(Alignment::Center),
+        ]
+        .spacing(10)
+        .align_x(Alignment::Center),
+    )
+    .center_x(Length::Fill)
+    .padding(40)
+    .into()
+}
+
+/// The full empty state: a large muted glyph, a title, a hint, and — where there
+/// is something to *do* about it — one accent button.
+///
+/// A single line of grey text in the middle of an otherwise empty panel says
+/// what is happening but offers no way out of it. This is the shape the macOS
+/// client uses everywhere a panel can be legitimately empty.
+pub fn empty_state_full<'a, M: Clone + 'a>(
+    glyph: Icon,
+    title: String,
+    hint: String,
+    action: Option<(String, M)>,
+    palette: Palette,
+) -> Element<'a, M> {
+    let mut stack = column![
+        icon(glyph, 34.0, palette.text_muted),
+        text(title)
+            .size(scale::BODY)
+            .font(moonlight_design::ui(EMPHATIC))
+            .color(palette.text),
+        text(hint)
+            .size(scale::META)
+            .color(palette.text_muted)
+            .align_x(Alignment::Center),
+    ]
+    .spacing(12)
+    .align_x(Alignment::Center);
+
+    if let Some((label, message)) = action {
+        stack = stack.push(
+            button(centre(
+                text(label)
+                    .size(13.0)
+                    .font(moonlight_design::ui(EMPHATIC))
+                    .color(palette.text_on_accent),
+            ))
+            .on_press(message)
+            .padding([0, 18])
+            .height(Length::Fixed(38.0))
+            .style(move |_, status| theme::accent_button(palette, status)),
+        );
+    }
+
+    container(stack)
+        .center_x(Length::Fill)
+        .center_y(Length::Fill)
+        .padding([28, 12])
+        .into()
+}
+
 #[cfg(test)]
 mod tests {
+    use super::*;
+
+    #[test]
+    fn the_toggle_knob_travels_the_distance_the_source_animates() {
+        // The composition slides the knob by exactly `translateX(18px)`. That
+        // number is not free — it is what the track's own geometry leaves once
+        // the knob and its two insets are taken out. A 48px track (which an
+        // earlier pass had) leaves 22 and the knob overshoots its own end.
+        let travel = TOGGLE_W - 2.0 * TOGGLE_INSET - TOGGLE_KNOB;
+        assert_eq!(travel, 18.0);
+    }
+
+    #[test]
+    fn the_knob_fits_the_track_with_its_inset_on_both_edges() {
+        assert_eq!(TOGGLE_H - 2.0 * TOGGLE_INSET, TOGGLE_KNOB);
+    }
+
+    #[test]
+    fn a_row_title_sits_below_the_body_step_and_its_sub_line_below_that() {
+        // 14.5/12, the pair the composition sets — not the 15/12.5 that the
+        // emphatic body steps would give. Rows set at the body step read as a
+        // stack of buttons rather than as a list.
+        assert_eq!(ROW_TITLE_SIZE, 14.5);
+        assert_eq!(SUB_SIZE, 12.0);
+        assert_eq!(scale::BODY, 15.0);
+        assert_eq!(scale::META, 12.5);
+    }
+
+    #[test]
+    fn an_app_tile_keeps_its_colour_across_rescans() {
+        // The inventory is rebuilt on every scan; a fill that moved with it
+        // would read as the list re-sorting itself.
+        let palette = Palette::DARK;
+        assert_eq!(
+            tile_fill("chrome.exe", palette),
+            tile_fill("chrome.exe", palette)
+        );
+    }
+
+    #[test]
+    fn an_app_tile_only_ever_takes_a_category_colour() {
+        // Never the accent: a column of lime tiles loses the only thing telling
+        // one row from the next.
+        let palette = Palette::DARK;
+        let fills = category_fills(palette);
+        for executable in [
+            "chrome.exe",
+            "Telegram.exe",
+            "steam.exe",
+            "Code.exe",
+            "7zFM.exe",
+            "javacpl.exe",
+        ] {
+            let fill = tile_fill(executable, palette);
+            assert!(
+                fills.contains(&fill),
+                "{executable} took a colour outside the category ramp"
+            );
+        }
+    }
+
+    #[test]
+    fn the_category_ramp_spreads_across_a_real_inventory() {
+        // A hash that collapsed onto one colour would compile and look wrong.
+        let palette = Palette::DARK;
+        let names = [
+            "chrome.exe",
+            "Telegram.exe",
+            "steam.exe",
+            "Code.exe",
+            "7zFM.exe",
+            "javacpl.exe",
+            "Spotify.exe",
+            "zoom.exe",
+            "explorer.exe",
+            "notepad.exe",
+        ];
+        let mut seen: Vec<Color> = Vec::new();
+        for name in names {
+            let fill = tile_fill(name, palette);
+            if !seen.contains(&fill) {
+                seen.push(fill);
+            }
+        }
+        assert!(
+            seen.len() >= 3,
+            "ten programmes produced only {} distinct tile colours",
+            seen.len()
+        );
+    }
+
     #[test]
     fn a_full_bar_has_no_empty_half_and_an_empty_bar_no_filled_half() {
         // FillPortion(0) still lays out, so the halves are added conditionally;

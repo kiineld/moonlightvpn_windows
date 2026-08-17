@@ -3,7 +3,7 @@
 use iced::widget::{button, canvas, column, container, row, text};
 use iced::{Alignment, Border, Element, Length};
 
-use moonlight_core::{format, AppLocale, ConnectionState, Node};
+use moonlight_core::{format, ConnectionState, Node};
 use moonlight_design::motion::{border, metrics, radii};
 use moonlight_design::typography::{line, scale, EMPHATIC, ROW_TITLE};
 use moonlight_design::{icon, Icon};
@@ -11,7 +11,7 @@ use moonlight_design::{icon, Icon};
 use crate::components;
 use crate::dial::Dial;
 use crate::localization::{t, S};
-use crate::{hspace, theme, vspace, Message, Moonlight};
+use crate::{hspace, theme, vspace, Message, Moonlight, Page};
 
 /// The dial's drawn size, from the composition.
 const DIAL: f32 = metrics::DIAL;
@@ -28,15 +28,18 @@ pub fn view(app: &Moonlight) -> Element<'_, Message> {
         container(dial_column(app))
             .padding(24)
             .height(Length::Fill)
-            .width(Length::FillPortion(3))
+            .width(Length::Fill)
             .style({
                 let palette = app.palette_of();
                 move |_| theme::panel(palette)
             }),
+        // A fixed 340, as the macOS client sets it — not a portion. Proportional
+        // columns make the server list grow with the window, and the rows inside
+        // it are a fixed size, so it ends up as a narrow list in a wide box.
         container(server_column(app))
             .padding(16)
             .height(Length::Fill)
-            .width(Length::FillPortion(2))
+            .width(Length::Fixed(metrics::SERVER_COLUMN))
             .style({
                 let palette = app.palette_of();
                 move |_| theme::panel(palette)
@@ -62,6 +65,19 @@ fn dial_column(app: &Moonlight) -> Element<'_, Message> {
         ConnectionState::Failed(_) => (S::StateFailed, palette.danger),
         ConnectionState::Disconnected => (S::StateDisconnected, palette.text_muted),
     };
+
+    // The dial is *dimmed*, not recoloured, when there is nothing to connect to
+    // — the macOS client drops the whole control to 50%. Swapping the palette
+    // instead makes a disabled dial look like a differently-styled live one.
+    let has_subscription = app.preferences().subscription_url.is_some();
+    let dim = |color: iced::Color| {
+        if has_subscription {
+            color
+        } else {
+            theme::alpha(color, 0.5)
+        }
+    };
+    let tone = dim(tone);
 
     // "Соединение" while up, not "Отключить": the dial names what you *have*,
     // and the hint under it says what pressing does.
@@ -102,7 +118,7 @@ fn dial_column(app: &Moonlight) -> Element<'_, Message> {
             .font(moonlight_design::display())
             .size(BIG_LABEL)
             .line_height(line::TIGHT)
-            .color(palette.text),
+            .color(dim(palette.text)),
         text(format::duration(app.uptime()))
             .font(moonlight_design::mono())
             .size(15.0)
@@ -215,7 +231,6 @@ fn stats(app: &Moonlight) -> Element<'_, Message> {
     let palette = app.palette_of();
     let locale = app.locale_of();
     let info = app.info();
-    let (up, down) = app.session();
 
     let cell = |label: S, value: String| {
         column![
@@ -232,36 +247,31 @@ fn stats(app: &Moonlight) -> Element<'_, Message> {
         .width(Length::Fill)
     };
 
-    // Session bytes only while there is a session; a "0 B" pair on a
-    // disconnected screen is two numbers that mean nothing.
-    let connected = app.state().is_connected();
-    let downloaded = if connected {
-        format::bytes(Some(down), locale)
+    // Before a plan exists the figures read **zero**, not "—". A dash is an
+    // answer about a plan, and showing one before there is a plan reads as a
+    // subscription whose panel omitted a field.
+    let has_subscription = app.preferences().subscription_url.is_some();
+
+    let traffic_left = if !has_subscription {
+        format::bytes(Some(0), locale)
     } else {
-        format::bytes(None, locale)
-    };
-    let uploaded = if connected {
-        format::bytes(Some(up), locale)
-    } else {
-        format::bytes(None, locale)
+        match info.total {
+            Some(total) => format::bytes(Some(total.saturating_sub(info.used().unwrap_or(0))), locale),
+            None => t(S::Unlimited, locale).to_string(),
+        }
     };
 
-    // With no subscription all three read "—". Showing "без срока" for the third
-    // while the other two are dashes claims a plan with no expiry rather than no
-    // plan at all — and it is wide enough to overrun its third of the strip.
-    let remaining = if app.preferences().subscription_url.is_some() {
+    let time_left = if has_subscription {
         format::time_left(info.expire, locale)
     } else {
-        format::bytes(None, locale)
+        format::days(Some(0), locale)
     };
 
     container(
         row![
-            cell(S::Downloaded, downloaded),
+            cell(S::TrafficLeft, traffic_left),
             divider(app),
-            cell(S::Uploaded, uploaded),
-            divider(app),
-            cell(S::Remaining, remaining),
+            cell(S::Remaining, time_left),
         ]
         .align_y(Alignment::Center),
     )
@@ -299,30 +309,26 @@ fn server_column(app: &Moonlight) -> Element<'_, Message> {
     )
     .padding([2, 4]);
 
-    let mut list = column![
-        heading,
-        vspace(Length::Fixed(12.0)),
-        auto_row(app),
-        vspace(Length::Fixed(8.0)),
-        components::soft_divider(palette),
-        vspace(Length::Fixed(8.0)),
-    ]
-    .spacing(2);
+    let mut list = column![heading, vspace(Length::Fixed(12.0))].spacing(2);
 
+    // With no nodes the panel is *only* the empty state. Keeping the Авто row
+    // above it offers a choice between servers that do not exist.
     if nodes.is_empty() {
-        let message = if app.preferences().subscription_url.is_none() {
-            match locale {
-                AppLocale::Ru => "Импортируйте подписку, чтобы увидеть узлы",
-                AppLocale::En => "Import a subscription to see nodes",
-            }
-        } else {
-            match locale {
-                AppLocale::Ru => "Узлы загружаются…",
-                AppLocale::En => "Loading nodes…",
-            }
-        };
-        list = list.push(components::empty_state(message, palette));
+        list = list.push(components::empty_state_full(
+            Icon::Globe,
+            t(S::NoSubscription, locale).to_string(),
+            t(S::NoSubscriptionHint, locale).to_string(),
+            Some((
+                t(S::AddSubscription, locale).to_string(),
+                Message::Navigate(Page::Import),
+            )),
+            palette,
+        ));
     } else {
+        list = list.push(auto_row(app));
+        list = list.push(vspace(Length::Fixed(8.0)));
+        list = list.push(components::soft_divider(palette));
+        list = list.push(vspace(Length::Fixed(8.0)));
         for node in nodes {
             // A panel that already offers a url-test picker makes the app's own
             // Авто row redundant, so only one of the two is shown.

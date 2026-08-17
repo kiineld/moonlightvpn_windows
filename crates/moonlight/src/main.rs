@@ -124,12 +124,15 @@ pub enum Page {
 }
 
 impl Page {
-    /// Logs and Connections are reached from Settings, not from the rail — they
-    /// are diagnostics, not destinations. Import is reached from Subscription.
-    pub const SIDEBAR: [Page; 4] = [
+    /// The rail, in the macOS client's order. Connections sits on it — "what is
+    /// going through the tunnel right now" is something people open the app to
+    /// look at, not a diagnostic buried under Settings. Logs is the diagnostic
+    /// and stays there; Import is reached from Subscription.
+    pub const SIDEBAR: [Page; 5] = [
         Page::Connect,
         Page::Subscription,
         Page::Apps,
+        Page::Connections,
         Page::Settings,
     ];
 
@@ -165,8 +168,8 @@ impl Page {
             Page::Apps => Icon::Layers,
             Page::Settings => Icon::Settings,
             Page::Import => Icon::Plus,
-            Page::Logs => Icon::Activity,
-            Page::Connections => Icon::Globe,
+            Page::Logs => Icon::CircleAlert,
+            Page::Connections => Icon::Activity,
         }
     }
 
@@ -178,7 +181,7 @@ impl Page {
     pub fn rail_item(self) -> Page {
         match self {
             Page::Import => Page::Subscription,
-            Page::Logs | Page::Connections => Page::Settings,
+            Page::Logs => Page::Settings,
             other => other,
         }
     }
@@ -188,6 +191,7 @@ impl Page {
 pub enum Message {
     Navigate(Page),
     ToggleSidebar,
+    ToggleLaunchAtLogin,
     CycleAppearance,
     SetLocale(AppLocale),
 
@@ -212,6 +216,8 @@ pub enum Message {
     RuleSubmit,
     AppSearchChanged(String),
     AppsScanned(Vec<AppEntry>),
+    /// Executable → its own icon, decoded off the UI thread.
+    IconsLoaded(Vec<(String, moonlight_core::app_icon::Rgba)>),
     RunningScanned(Vec<String>),
 
     InstallHelper,
@@ -222,6 +228,7 @@ pub enum Message {
     OpenUrl(&'static str),
 
     LogFilterLevel(u8),
+    LogFilterSource(screens::logs::LogFilter),
     LogFilterText(String),
     ClearLogs,
     CloseConnection(String),
@@ -256,6 +263,9 @@ pub struct Moonlight {
     last_error: Option<String>,
 
     apps: Vec<AppEntry>,
+    /// Executable → the programme's own icon, keyed the same way the app list
+    /// and the split rules are.
+    app_icons: std::collections::HashMap<String, iced::widget::image::Handle>,
     running: Vec<String>,
     app_search: String,
     rule_kind: Kind,
@@ -270,6 +280,7 @@ pub struct Moonlight {
     started: Instant,
     logs: Vec<LogEntry>,
     log_level: u8,
+    log_source: screens::logs::LogFilter,
     log_filter: String,
     connections: Vec<Connection>,
 
@@ -280,7 +291,11 @@ pub struct Moonlight {
 
 impl Moonlight {
     fn new() -> (Self, Task<Message>) {
-        let preferences = Preferences::load();
+        let mut preferences = Preferences::load();
+        // The Run key is the fact; the stored flag only mirrors it. A user who
+        // removed the entry with msconfig while the app was shut must not come
+        // back to a switch that still reads "on".
+        preferences.launch_at_login = moonlight_core::autostart::is_enabled();
         let app = Moonlight::with_preferences(preferences.clone());
 
         // The controller owns everything below the UI and runs in its own task.
@@ -324,6 +339,7 @@ impl Moonlight {
             is_refreshing: false,
             last_error: None,
             apps: Vec::new(),
+            app_icons: std::collections::HashMap::new(),
             running: Vec::new(),
             app_search: String::new(),
             rule_kind: Kind::DomainSuffix,
@@ -335,6 +351,7 @@ impl Moonlight {
             started: Instant::now(),
             logs: Vec::new(),
             log_level: 1,
+            log_source: screens::logs::LogFilter::default(),
             log_filter: String::new(),
             connections: Vec::new(),
             sidebar_collapsed,
@@ -407,6 +424,18 @@ impl Moonlight {
             Message::SetLocale(locale) => {
                 self.preferences.locale = locale;
                 self.save();
+            }
+            Message::ToggleLaunchAtLogin => {
+                let wanted = !self.preferences.launch_at_login;
+                // The registry is the fact, the preference only mirrors it. If
+                // the write is refused the switch stays where it was rather than
+                // showing a state Windows will not honour.
+                if moonlight_core::autostart::set_enabled(wanted) {
+                    self.preferences.launch_at_login = wanted;
+                    self.save();
+                } else {
+                    self.last_error = Some(t(S::AutostartFailed, self.locale()).to_string());
+                }
             }
 
             Message::ToggleConnection => {
@@ -508,7 +537,34 @@ impl Moonlight {
                 }
             }
             Message::AppSearchChanged(value) => self.app_search = value,
-            Message::AppsScanned(apps) => self.apps = apps,
+            Message::AppsScanned(apps) => {
+                let executables: Vec<(String, String)> = apps
+                    .iter()
+                    .map(|entry| (entry.executable.clone(), entry.path.clone()))
+                    .collect();
+                self.apps = apps;
+                // Decoding several hundred icons is GDI work measured in whole
+                // seconds; it does not belong on the frame the list first draws.
+                //
+                // Split into batches rather than run as one job: each batch
+                // reports as it lands, so the icons fill in over the first
+                // second instead of the whole list staying lettered until the
+                // last executable has been read.
+                return Task::batch(
+                    executables
+                        .chunks(ICON_BATCH)
+                        .map(|batch| Task::perform(load_icons(batch.to_vec()), Message::IconsLoaded))
+                        .collect::<Vec<_>>(),
+                );
+            }
+            Message::IconsLoaded(icons) => {
+                for (executable, rgba) in icons {
+                    self.app_icons.insert(
+                        executable,
+                        iced::widget::image::Handle::from_rgba(rgba.width, rgba.height, rgba.pixels),
+                    );
+                }
+            }
             Message::RunningScanned(running) => self.running = running,
 
             Message::InstallHelper => {
@@ -535,6 +591,7 @@ impl Moonlight {
             Message::OpenUrl(url) => open_url(url),
 
             Message::LogFilterLevel(level) => self.log_level = level,
+            Message::LogFilterSource(source) => self.log_source = source,
             Message::LogFilterText(value) => self.log_filter = value,
             Message::ClearLogs => self.logs.clear(),
             Message::CloseConnection(id) => send(Command::CloseConnection(id)),
@@ -769,6 +826,31 @@ async fn scan_apps() -> Vec<AppEntry> {
         .unwrap_or_default()
 }
 
+/// How many executables one icon-decoding job takes.
+///
+/// Small enough that the first icons land almost immediately, large enough that
+/// a machine with a thousand programmes does not queue a thousand tasks.
+const ICON_BATCH: usize = 48;
+
+/// Decodes every programme's icon off the UI thread.
+///
+/// Executables with no icon resource are simply absent from the result rather
+/// than stored as `None`, so the lookup in the view stays a plain `get`.
+async fn load_icons(
+    executables: Vec<(String, String)>,
+) -> Vec<(String, moonlight_core::app_icon::Rgba)> {
+    tokio::task::spawn_blocking(move || {
+        executables
+            .into_iter()
+            .filter_map(|(executable, path)| {
+                moonlight_core::app_icon::load(&path).map(|icon| (executable, icon))
+            })
+            .collect()
+    })
+    .await
+    .unwrap_or_default()
+}
+
 async fn scan_running() -> Vec<String> {
     tokio::task::spawn_blocking(moonlight_core::app_inventory::running_executables)
         .await
@@ -975,6 +1057,12 @@ impl Moonlight {
     pub fn apps(&self) -> &[AppEntry] {
         &self.apps
     }
+    /// The programme's own icon, once it has been decoded. `None` while the scan
+    /// is still running, or for an executable that carries no icon resource —
+    /// the row falls back to a lettered tile.
+    pub fn app_icon(&self, executable: &str) -> Option<&iced::widget::image::Handle> {
+        self.app_icons.get(executable)
+    }
     pub fn is_running(&self, executable: &str) -> bool {
         self.running
             .iter()
@@ -1006,6 +1094,9 @@ impl Moonlight {
     }
     pub fn log_level(&self) -> u8 {
         self.log_level
+    }
+    pub fn log_source(&self) -> screens::logs::LogFilter {
+        self.log_source
     }
     pub fn log_filter(&self) -> &str {
         &self.log_filter
@@ -1108,10 +1199,26 @@ mod tests {
     }
 
     #[test]
-    fn the_sidebar_carries_exactly_the_four_primary_pages() {
-        assert_eq!(Page::SIDEBAR.len(), 4);
-        for page in [Page::Logs, Page::Connections, Page::Import] {
+    fn the_sidebar_carries_the_five_destinations_the_macos_client_does() {
+        assert_eq!(Page::SIDEBAR, [
+            Page::Connect,
+            Page::Subscription,
+            Page::Apps,
+            Page::Connections,
+            Page::Settings,
+        ]);
+        // Logs is the diagnostic and stays under Settings; Import is reached
+        // from Subscription.
+        for page in [Page::Logs, Page::Import] {
             assert!(!Page::SIDEBAR.contains(&page));
+        }
+    }
+
+    #[test]
+    fn every_rail_entry_lights_itself() {
+        // Connections used to light Settings, from when it lived under it.
+        for page in Page::SIDEBAR {
+            assert_eq!(page.rail_item(), page);
         }
     }
 
@@ -1121,7 +1228,6 @@ mod tests {
         // left the app.
         assert_eq!(Page::Import.rail_item(), Page::Subscription);
         assert_eq!(Page::Logs.rail_item(), Page::Settings);
-        assert_eq!(Page::Connections.rail_item(), Page::Settings);
         assert_eq!(Page::Connect.rail_item(), Page::Connect);
     }
 

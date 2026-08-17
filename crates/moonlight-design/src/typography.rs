@@ -62,11 +62,27 @@ pub fn display() -> Font {
 
 /// The mono face carries timers, latency figures and the subscription URL.
 ///
-/// Left as the platform monospace rather than bundled: on Windows that is
-/// Consolas or Cascadia Mono, both of which have the tabular digits a ticking
-/// `00:00:00` needs, and neither of which costs a megabyte in the binary.
+/// Not bundled: Consolas ships with every Windows since Vista, has the tabular
+/// digits a ticking `00:00:00` needs, and costs nothing in the binary.
+///
+/// It is named **explicitly** rather than left as [`Font::MONOSPACE`]. That
+/// constant is the generic `monospace` family, which fontdb does not resolve to
+/// an installed face on Windows; the shaper then falls back per *glyph*, so the
+/// digits come from one face and the colons from another with a far wider
+/// advance. The timer renders as `00: 00: 00` and every `.exe` in the app list
+/// as `name. exe` — a spacing bug with no error attached to it.
 pub fn mono() -> Font {
-    Font::MONOSPACE
+    #[cfg(windows)]
+    {
+        Font {
+            family: Family::Name("Consolas"),
+            ..Font::DEFAULT
+        }
+    }
+    #[cfg(not(windows))]
+    {
+        Font::MONOSPACE
+    }
 }
 
 pub const BODY: Weight = Weight::Medium;
@@ -131,6 +147,18 @@ mod tests {
     #[test]
     fn tracking_resolves_em_against_size() {
         assert!((tracking(scale::TRACK_DISPLAY, 40.0) - -1.2).abs() < 1e-5);
+    }
+
+    #[test]
+    #[cfg(windows)]
+    fn the_mono_face_names_a_real_family_rather_than_the_generic_one() {
+        // `Font::MONOSPACE` is the generic `monospace` family. fontdb does not
+        // resolve it to an installed face on Windows, so the shaper falls back
+        // per glyph: the digits come from one face and the colons from another
+        // with a far wider advance, and the timer renders as `00: 00: 00`.
+        // Nothing errors — it just looks broken.
+        assert_ne!(mono(), Font::MONOSPACE);
+        assert_eq!(mono().family, Family::Name("Consolas"));
     }
 
     #[test]

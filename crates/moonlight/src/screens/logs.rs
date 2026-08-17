@@ -22,7 +22,18 @@ pub fn view(app: &Moonlight) -> Element<'_, Message> {
     // The level is a floor, not an exact match: WARN means warnings and errors.
     let levels: [(u8, &str); 4] = [(0, "DEBUG"), (1, "INFO"), (2, "WARN"), (3, "ERROR")];
 
+    // Which timeline. "Обе" is the default and its own option rather than a
+    // cleared filter: the two read together is the whole reason they share a
+    // list, so the combined view has to be reachable in one press.
+    let sources: [(LogFilter, &str); 3] = [
+        (LogFilter::Both, t(S::LogBoth, locale)),
+        (LogFilter::App, t(S::LogClient, locale)),
+        (LogFilter::Core, t(S::LogCore, locale)),
+    ];
+
     let controls = row![
+        components::segmented(&sources, app.log_source(), Message::LogFilterSource, palette),
+        hspace(Length::Fixed(12.0)),
         components::segmented(&levels, app.log_level(), Message::LogFilterLevel, palette),
         hspace(Length::Fixed(12.0)),
         text_input(t(S::FilterText, locale), app.log_filter())
@@ -46,7 +57,10 @@ pub fn view(app: &Moonlight) -> Element<'_, Message> {
     let matching: Vec<_> = app
         .logs()
         .iter()
-        .filter(|entry| passes(&entry.level, &entry.message, app.log_level(), &needle))
+        .filter(|entry| {
+            app.log_source().accepts(entry.source)
+                && passes(&entry.level, &entry.message, app.log_level(), &needle)
+        })
         .collect();
 
     let mut list = column![].spacing(1);
@@ -98,6 +112,28 @@ pub fn view(app: &Moonlight) -> Element<'_, Message> {
     .into()
 }
 
+/// Which of the two timelines the list is showing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum LogFilter {
+    /// Both, interleaved — the default, and the reason they share a list.
+    #[default]
+    Both,
+    /// The app's own narration.
+    App,
+    /// mihomo's log.
+    Core,
+}
+
+impl LogFilter {
+    pub fn accepts(self, source: LogSource) -> bool {
+        match self {
+            LogFilter::Both => true,
+            LogFilter::App => source == LogSource::App,
+            LogFilter::Core => source == LogSource::Core,
+        }
+    }
+}
+
 /// Exposed so the tests can assert the filter without building a widget tree.
 pub fn passes(level: &str, message: &str, floor: u8, needle: &str) -> bool {
     level_rank(level) >= floor
@@ -134,5 +170,22 @@ mod tests {
         // mihomo writes ERRO and WARN, not ERROR and WARNING.
         assert!(passes("ERRO", "boom", 3, ""));
         assert!(passes("WARN", "slow", 2, ""));
+    }
+
+    #[test]
+    fn both_is_the_default_and_hides_neither_timeline() {
+        // Read apart, a failed connect is a core error with no cause.
+        let filter = LogFilter::default();
+        assert_eq!(filter, LogFilter::Both);
+        assert!(filter.accepts(LogSource::App));
+        assert!(filter.accepts(LogSource::Core));
+    }
+
+    #[test]
+    fn each_source_admits_only_its_own_lines() {
+        assert!(LogFilter::App.accepts(LogSource::App));
+        assert!(!LogFilter::App.accepts(LogSource::Core));
+        assert!(LogFilter::Core.accepts(LogSource::Core));
+        assert!(!LogFilter::Core.accepts(LogSource::App));
     }
 }

@@ -24,7 +24,7 @@ function Get-Remote($url, $out) {
             Start-Sleep -Seconds $delays[$i]
         }
         try {
-            Get-Remote $url $out -Headers $headers -UseBasicParsing
+            Invoke-WebRequest -Uri $url -OutFile $out -Headers $headers -UseBasicParsing
             return
         } catch {
             Write-Host "  $($_.Exception.Message)"
@@ -42,7 +42,7 @@ if (-not (Test-Path resources\mihomo\mihomo.exe)) {
     $name = "mihomo-windows-amd64-$mihomoVersion.zip"
     $url  = "https://github.com/MetaCubeX/mihomo/releases/download/$mihomoVersion/$name"
     Write-Host "fetching $name"
-    Invoke-WebRequest -Uri $url -OutFile "$env:TEMP\$name"
+    Get-Remote $url "$env:TEMP\$name"
     Expand-Archive -Path "$env:TEMP\$name" -DestinationPath "$env:TEMP\mihomo" -Force
     Get-ChildItem "$env:TEMP\mihomo" -Filter *.exe -Recurse |
         Select-Object -First 1 |
@@ -55,7 +55,7 @@ if (-not (Test-Path resources\mihomo\mihomo.exe)) {
 if (-not (Test-Path resources\mihomo\wintun.dll)) {
     $name = "wintun-$wintunVersion.zip"
     Write-Host "fetching $name"
-    Invoke-WebRequest -Uri "https://www.wintun.net/builds/$name" -OutFile "$env:TEMP\$name"
+    Get-Remote "https://www.wintun.net/builds/$name" "$env:TEMP\$name"
     Expand-Archive -Path "$env:TEMP\$name" -DestinationPath "$env:TEMP\wintun" -Force
     Copy-Item "$env:TEMP\wintun\wintun\bin\amd64\wintun.dll" resources\mihomo\wintun.dll
 }

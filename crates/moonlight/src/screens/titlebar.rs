@@ -99,7 +99,10 @@ pub fn view(app: &Moonlight) -> Element<'_, Message> {
     .align_y(Alignment::Center);
 
     container(row![drag, hspace(Length::Fixed(8.0)), controls].align_y(Alignment::Center))
-        .height(Length::Fixed(metrics::TITLE_BAR))
+        // Centred rather than merely sized, for the same reason as the page
+        // header: the caption controls happen to be exactly this tall today, so
+        // top-alignment is invisible here until one of them changes.
+        .center_y(Length::Fixed(metrics::TITLE_BAR))
         .padding(iced::Padding {
             top: 0.0,
             right: 0.0,

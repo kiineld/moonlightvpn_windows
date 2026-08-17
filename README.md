@@ -45,6 +45,15 @@ which reads as a different application wearing this one as a skin. Drawing it
 means dragging and maximising become this app's job; `iced::window` provides
 both.
 
+Resizing, however, does **not** become this app's job, which is worth writing
+down because the shape of the code suggests otherwise: nothing calls
+`iced::window::drag_resize`, so the edges look unwired. They are not. winit's
+`with_decorations(false)` drops the caption's *painting* but keeps
+`WS_THICKFRAME` on the window, so Windows still hit-tests the border and
+edge-drag resizing works natively — confirmed on Windows 11 by reading the style
+bits off the live window. Adding hit-zones would duplicate what the OS already
+does.
+
 ## Architecture
 
 ```
@@ -477,14 +486,26 @@ which is fine on a runner that is thrown away and not on a laptop.
 
 An honest list, not a roadmap.
 
-- **Nothing has been run interactively on Windows.** It was written on macOS,
-  where the whole workspace compiles for `x86_64-pc-windows-msvc` and the UI runs
-  natively. CI does execute the Windows-only paths on a real Windows runner —
-  the registry proxy, the service, the named pipe, the app inventory — and the
-  integration suite drives a real mihomo core. What has not happened is a person
-  sitting in front of it: no session has been left connected carrying a machine's
-  own traffic, and TUN has never created a Wintun adapter, because CI validates
-  those configs without starting them.
+- **The tunnel has still not been run interactively on Windows.** The UI now has
+  been: the app has been built and driven on real Windows 11 hardware, and every
+  screen that does not need a subscription — Подключение, Приложения, Настройки —
+  has been looked at and corrected against the composition. What has *not*
+  happened is a live session: no tunnel has been brought up carrying a machine's
+  own traffic, the system-proxy registry round trip has not been watched through
+  a connect/disconnect, and TUN has never created a Wintun adapter, because CI
+  validates those configs without starting them. The Подписка screen has only
+  been seen in its empty state, since populating it needs a real subscription.
+- The updater's detached `.cmd` has still never run against a real release; it is
+  exercised only as a string in tests.
+- **The Подписка screen is still the odd one out.** The macOS client always draws
+  the plan card, the traffic bar and the device list, reading zeroes before a
+  subscription exists; this one collapses to a single "Добавить подписку" row.
+  Everything else — the rail, the dial, Приложения, Соединения, Настройки — has
+  been matched against that client screen by screen on real hardware.
+- Minimise-to-tray and connect-on-launch are specified by the composition and are
+  **not** implemented, so the СИСТЕМА group carries one switch rather than three.
+  A switch that flips and changes nothing is worse than an absent one.
+- Соединения has no search field yet; the macOS client filters the list from one.
 - **The app is unsigned,** so SmartScreen warns on first run. That needs a
   code-signing certificate bought from a CA; no build configuration substitutes
   for one. The release workflow signs both executables when `SIGNING_CERTIFICATE`
