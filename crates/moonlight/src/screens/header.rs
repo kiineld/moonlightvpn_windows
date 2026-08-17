@@ -137,12 +137,15 @@ fn action<'a>(
     element.into()
 }
 
-/// The round theme button. Its glyph is what pressing it moves *towards*, which
-/// is the convention the composition follows: a sun on the dark theme.
+/// The round theme button. Its glyph names the theme that is **on**, not the one
+/// pressing it would move to: a moon while dark, a sun while light. The macOS
+/// client shows the destination instead, and the two readings are impossible to
+/// tell apart without pressing the button — so the one that describes the
+/// current state wins, since that is the question a status glyph answers.
 fn appearance_button<'a>(palette: Palette, appearance: Option<&str>) -> Element<'a, Message> {
     let glyph = match appearance {
-        Some("dark") => Icon::Sun,
-        Some("light") => Icon::Moon,
+        Some("dark") => Icon::Moon,
+        Some("light") => Icon::Sun,
         // Following the system is its own state, and neither a sun nor a moon
         // says so.
         _ => Icon::Monitor,
