@@ -16,10 +16,17 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: x86_64-pc-windows-msvc
-          components: rustfmt, clippy
+      # rustup is pre-installed on every GitHub runner, and rust-toolchain.toml
+      # already pins the channel, targets and components — so an action here
+      # only adds a download that can fail. It did: codeload served 429s for
+      # dtolnay/rust-toolchain and took every job down at "Set up job", on a
+      # commit where nothing was wrong with the code.
+      - name: Toolchain
+        run: |
+          rustup toolchain install stable --profile minimal --component rustfmt,clippy
+          rustup default stable
+          rustup target add x86_64-pc-windows-msvc
+          rustc --version && cargo --version
       - uses: Swatinem/rust-cache@v2
       - run: cargo fmt --all -- --check
       - run: cargo check --workspace --target x86_64-pc-windows-msvc
@@ -43,7 +50,11 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - name: Toolchain
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+          rustc --version && cargo --version
       - uses: Swatinem/rust-cache@v2
       - uses: actions/setup-python@v5
         with:

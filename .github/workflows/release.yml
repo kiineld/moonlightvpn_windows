@@ -17,9 +17,14 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: x86_64-pc-windows-msvc
+      # See ci.yml: rustup ships with the runner, and the action is one more
+      # download that can 429.
+      - name: Toolchain
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+          rustup target add x86_64-pc-windows-msvc
+          rustc --version && cargo --version
 
       - uses: Swatinem/rust-cache@v2
 
