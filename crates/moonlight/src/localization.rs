@@ -46,21 +46,29 @@ strings! {
     Disconnect      => "Отключить"          / "Disconnect",
     Connecting      => "Подключение…"       / "Connecting…",
     Disconnecting   => "Отключение…"        / "Disconnecting…",
+    // "Защищено", not "Подключено": the dial reports what you have rather than
+    // what happened, which is the composition's wording.
+    StateSecure     => "Защищено"           / "Secure",
+    Connection      => "Соединение"         / "Connected",
     StateConnected  => "ПОДКЛЮЧЕНО"         / "CONNECTED",
     StateDisconnected => "ОТКЛЮЧЕНО"        / "DISCONNECTED",
     StateFailed     => "ОШИБКА"             / "FAILED",
     PressToConnect  => "нажмите, чтобы подключиться" / "press to connect",
+    PressToDisconnect => "нажмите, чтобы отключиться" / "press to disconnect",
     Ping            => "Пинг"               / "Ping",
+    Measuring       => "Замер…"             / "Measuring…",
     Refresh         => "Обновить"           / "Refresh",
+    Refreshing      => "Обновление"         / "Refreshing",
     Servers         => "СЕРВЕРЫ"            / "SERVERS",
     Auto            => "Авто"               / "Auto",
     AutoSubtitle    => "Ближайший узел по пингу" / "Lowest-latency node",
+    AutoPicked      => "Выбран"             / "Using",
     Downloaded      => "СКАЧАНО"            / "DOWNLOADED",
     Uploaded        => "ОТДАНО"             / "UPLOADED",
     Remaining       => "ОСТАЛОСЬ"           / "REMAINING",
 
     // Subscription
-    SubscriptionSubtitle => "Тариф и трафик" / "Plan and traffic",
+    SubscriptionSubtitle => "Тариф, трафик и устройства" / "Plan, traffic and devices",
     Plan            => "Тариф"              / "Plan",
     Traffic         => "ТРАФИК"             / "TRAFFIC",
     Devices         => "УСТРОЙСТВА"         / "DEVICES",
@@ -78,8 +86,8 @@ strings! {
     OfTraffic       => "трафика"            / "of traffic",
 
     // Import
-    ImportTitle     => "Импорт подписки"    / "Import a subscription",
-    ImportSubtitle  => "Вставьте ссылку на подписку из панели" / "Paste the subscription link from your panel",
+    ImportTitle     => "Добавить подписку"  / "Add a subscription",
+    ImportSubtitle  => "Ссылка из бота или личного кабинета" / "A link from the bot or your account page",
     ImportPlaceholder => "https://panel.example.com/sub/…" / "https://panel.example.com/sub/…",
     Import          => "Добавить"           / "Add",
     PasteFromClipboard => "Вставить из буфера" / "Paste from the clipboard",
@@ -89,7 +97,7 @@ strings! {
     OpenTelegramBot => "Открыть Telegram-бот" / "Open the Telegram bot",
 
     // Apps / split tunnelling
-    AppsSubtitle    => "Выберите, какие приложения идут через туннель" / "Choose which apps go through the tunnel",
+    AppsSubtitle    => "Какой трафик идёт через туннель" / "Which traffic goes through the tunnel",
     SplitAll        => "Весь трафик"        / "All traffic",
     SplitOnly       => "Только эти"         / "Only these",
     SplitExcept     => "Кроме этих"         / "Except these",
@@ -98,16 +106,16 @@ strings! {
     Programs        => "ПРОГРАММЫ"          / "PROGRAMS",
     RulesHeading    => "ПРАВИЛА"            / "RULES",
     RunningNow      => "Запущено"           / "Running",
-    SplitAllNote    => "Через туннель пойдёт весь трафик." / "Everything goes through the tunnel.",
+    SplitAllNote    => "Через туннель идёт весь трафик компьютера." / "All traffic from this computer goes through the tunnel.",
     SplitOnlyNote   => "Через туннель пойдут только отмеченные программы — остальные напрямую." / "Only the ticked programs go through the tunnel; the rest go direct.",
-    SplitExceptNote => "Отмеченные программы пойдут напрямую — остальной трафик через туннель." / "The ticked programs go direct; everything else goes through the tunnel.",
+    SplitExceptNote => "Отмеченные программы пойдут напрямую, весь остальной трафик — через туннель." / "The ticked programs go direct; all other traffic goes through the tunnel.",
     RulesFootnote   => "Правила по доменам, адресам и портам работают в обоих режимах. PROCESS-* требуют TUN." / "Domain, address and port rules work in both modes. PROCESS-* rules need TUN.",
     NoApps          => "Программы не найдены" / "No programs found",
     Rules           => "Правила"            / "Rules",
     AddRule         => "Добавить правило"   / "Add rule",
 
     // Settings
-    SettingsSubtitle => "Режим туннеля, оформление и обновления" / "Tunnel mode, appearance and updates",
+    SettingsSubtitle => "Система, приложение и поддержка" / "System, app and support",
     ModeSystemProxy => "Системный прокси"   / "System proxy",
     ModeTun         => "TUN"                / "TUN",
     ModeSystemProxyNote => "Не требует прав. Захватывает только приложения, которые уважают системный прокси." / "Needs no privileges. Captures only apps that honour the system proxy.",
@@ -121,6 +129,9 @@ strings! {
     ThemeLight      => "Светлое"            / "Light",
     Language        => "Язык"               / "Language",
     LaunchAtLogin   => "Запускать при входе" / "Launch at sign-in",
+    MinimiseToTray  => "Свернуть в системный трей" / "Minimise to the system tray",
+    MinimiseToTrayNote => "Окно закрывается в трей, туннель работает" / "Closing the window leaves the tunnel running",
+    ThisDevice      => "Windows PC"         / "Windows PC",
     CheckForUpdates => "Проверить обновления" / "Check for updates",
     OurChannel      => "Наш канал"          / "Our channel",
     Support         => "Поддержка"          / "Support",
@@ -188,7 +199,13 @@ mod tests {
         // A missing translation shows up as an English string in the Russian
         // column, which is easy to miss by eye across a hundred entries. The
         // few that are legitimately identical are listed here.
-        const SAME_IN_BOTH: &[S] = &[S::ModeTun, S::Unknown, S::ImportPlaceholder];
+        const SAME_IN_BOTH: &[S] = &[
+            S::ModeTun,
+            S::Unknown,
+            S::ImportPlaceholder,
+            // A machine name, not a word.
+            S::ThisDevice,
+        ];
 
         for string in ALL {
             if SAME_IN_BOTH.contains(string) {

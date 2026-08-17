@@ -38,6 +38,18 @@ pub fn divider<'a, M: 'a>(palette: Palette) -> Element<'a, M> {
         .into()
 }
 
+/// The softer hairline — `--ml-hairline-soft`. Separates items inside one group,
+/// where the full hairline would read as a boundary between two.
+pub fn soft_divider<'a, M: 'a>(palette: Palette) -> Element<'a, M> {
+    container(Space::new().height(Length::Fixed(1.0)))
+        .width(Length::Fill)
+        .style(move |_| container::Style {
+            background: Some(Background::Color(palette.hairline_soft)),
+            ..Default::default()
+        })
+        .into()
+}
+
 /// The rounded square that carries an icon at the head of a row.
 ///
 /// Its fill is a *category* colour, not the accent: the Subscription and
@@ -49,7 +61,7 @@ pub fn tile<'a, M: 'a>(glyph: Icon, fill: Color, ink: Color) -> Element<'a, M> {
         .style(move |_| container::Style {
             background: Some(Background::Color(fill)),
             border: Border {
-                radius: iced::border::Radius::from(radii::TILE),
+                radius: iced::border::Radius::from(radii::ICON),
                 ..Default::default()
             },
             ..Default::default()

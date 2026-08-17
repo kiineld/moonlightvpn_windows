@@ -1,13 +1,23 @@
 //! The page header: title, subtitle, and the three global actions.
+//!
+//! 64px tall with a soft hairline under it, from the desktop composition — the
+//! `--ml-header-height` token says 56, but the composition that ships sets 64,
+//! and the composition wins.
 
 use iced::widget::{button, column, container, row, text};
-use iced::{Alignment, Element, Length};
+use iced::{Alignment, Background, Element, Length};
 
-use moonlight_design::typography::{scale, EMPHATIC};
+use moonlight_core::AppLocale;
+use moonlight_design::motion::{metrics, radii};
+use moonlight_design::typography::{line, scale, EMPHATIC};
 use moonlight_design::{icon, Icon, Palette};
 
 use crate::localization::{t, S};
 use crate::{hspace, theme, Message, Moonlight};
+
+/// The header's own type step. Smaller than `--ml-t-title`: the page title sits
+/// under a window title bar here, and 24px competes with it.
+const TITLE: f32 = 20.0;
 
 pub fn view(app: &Moonlight) -> Element<'_, Message> {
     let palette = app.palette_of();
@@ -17,13 +27,14 @@ pub fn view(app: &Moonlight) -> Element<'_, Message> {
     let titles = column![
         text(t(page.title(), locale))
             .font(moonlight_design::display())
-            .size(scale::TITLE)
+            .size(TITLE)
+            .line_height(line::TITLE)
             .color(palette.text),
         text(t(page.subtitle(), locale))
-            .size(scale::BODY_SM)
-            .color(palette.text2),
+            .size(scale::META)
+            .color(palette.text_muted),
     ]
-    .spacing(2);
+    .spacing(3);
 
     // Ping and Refresh only mean anything once there is a subscription to
     // measure or re-fetch; offering them before is a button that answers with
@@ -35,31 +46,57 @@ pub fn view(app: &Moonlight) -> Element<'_, Message> {
             palette,
             locale,
             Icon::Activity,
-            S::Ping,
+            if app.is_pinging() {
+                S::Measuring
+            } else {
+                S::Ping
+            },
             app.is_pinging(),
-            has_subscription.then_some(Message::Ping)
+            has_subscription.then_some(Message::Ping),
         ),
         action(
             palette,
             locale,
             Icon::RefreshCw,
-            S::Refresh,
+            if app.is_refreshing() {
+                S::Refreshing
+            } else {
+                S::Refresh
+            },
             app.is_refreshing(),
-            has_subscription.then_some(Message::Refresh)
+            has_subscription.then_some(Message::Refresh),
         ),
         appearance_button(palette, app.preferences().appearance.as_deref()),
     ]
-    .spacing(10)
+    .spacing(12)
     .align_y(Alignment::Center);
 
-    row![titles, hspace(Length::Fill), actions]
-        .align_y(Alignment::Center)
-        .into()
+    container(
+        row![titles, hspace(Length::Fill), actions]
+            .spacing(12)
+            .align_y(Alignment::Center),
+    )
+    .height(Length::Fixed(metrics::HEADER))
+    .padding([0, 24])
+    .style(move |_| container::Style {
+        // A soft hairline, not the full one: it separates the header from the
+        // page rather than drawing a box around it.
+        border: iced::Border {
+            width: 0.0,
+            ..Default::default()
+        },
+        background: None,
+        ..container::Style {
+            background: Some(Background::Color(iced::Color::TRANSPARENT)),
+            ..Default::default()
+        }
+    })
+    .into()
 }
 
 fn action<'a>(
     palette: Palette,
-    locale: moonlight_core::AppLocale,
+    locale: AppLocale,
     glyph: Icon,
     label: S,
     busy: bool,
@@ -76,21 +113,20 @@ fn action<'a>(
 
     let mut element = button(
         row![
-            icon(glyph, 17.0, ink),
+            // 2.2 rather than lucide's 2.0: at 16px the composition thickens
+            // these two glyphs so they hold their weight beside 800 type.
+            moonlight_design::icon_thin(glyph, 16.0, ink, 2.2),
             text(t(label, locale))
-                .size(scale::BODY_SM)
+                .size(13.0)
                 .font(moonlight_design::ui(EMPHATIC))
-                .color(if message.is_some() {
-                    palette.text
-                } else {
-                    palette.text_muted
-                }),
+                .color(ink),
         ]
         .spacing(8)
         .align_y(Alignment::Center),
     )
-    .padding([10, 16])
-    .style(move |_, status| theme::ghost_button(palette, status));
+    .height(Length::Fixed(metrics::CONTROL_SM))
+    .padding([0, 15])
+    .style(move |_, status| theme::header_button(palette, status));
 
     if let Some(message) = message {
         element = element.on_press(message);
@@ -98,21 +134,38 @@ fn action<'a>(
     element.into()
 }
 
-/// The round sun/moon button. Its glyph is what the theme *is*, not what
-/// pressing it would do — a moon on a dark UI reading as "you are in dark mode"
-/// is the convention every OS uses.
+/// The round theme button. Its glyph is what pressing it moves *towards*, which
+/// is the convention the composition follows: a sun on the dark theme.
 fn appearance_button<'a>(palette: Palette, appearance: Option<&str>) -> Element<'a, Message> {
     let glyph = match appearance {
-        Some("dark") => Icon::Moon,
-        Some("light") => Icon::Sun,
+        Some("dark") => Icon::Sun,
+        Some("light") => Icon::Moon,
         // Following the system is its own state, and neither a sun nor a moon
         // says so.
         _ => Icon::Monitor,
     };
 
-    button(container(icon(glyph, 18.0, palette.accent_ink)).center_x(Length::Fixed(22.0)))
+    button(container(icon(glyph, 17.0, palette.text2)).center(Length::Fill))
+        .width(Length::Fixed(metrics::CONTROL_SM))
+        .height(Length::Fixed(metrics::CONTROL_SM))
+        .padding(0)
         .on_press(Message::CycleAppearance)
-        .padding(12)
-        .style(move |_, status| theme::ghost_button(palette, status))
+        .style(move |_, status| theme::icon_button(palette, status))
+        .into()
+}
+
+/// The header's hairline, drawn by the shell so it spans the full content width
+/// rather than stopping at the header's padding.
+pub fn rule<'a>(palette: Palette) -> Element<'a, Message> {
+    container(crate::vspace(Length::Fixed(1.0)))
+        .width(Length::Fill)
+        .style(move |_| container::Style {
+            background: Some(Background::Color(palette.hairline_soft)),
+            border: iced::Border {
+                radius: iced::border::Radius::from(radii::PILL),
+                ..Default::default()
+            },
+            ..Default::default()
+        })
         .into()
 }

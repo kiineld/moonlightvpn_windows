@@ -70,6 +70,9 @@ pub fn mono() -> Font {
 }
 
 pub const BODY: Weight = Weight::Medium;
+/// Weight 600, which the composition uses for the mono numbers rather than the
+/// body weight: the timer, latency figures and the shortcut chip.
+pub const MEDIUM: Weight = Weight::Semibold;
 pub const ROW_TITLE: Weight = Weight::Bold;
 pub const EMPHATIC: Weight = Weight::ExtraBold;
 
@@ -99,6 +102,21 @@ pub mod scale {
 /// pixels where the source tokens are relative.
 pub fn tracking(em: f32, size: f32) -> f32 {
     em * size
+}
+
+/// Line heights, from `tokens/typography.css`.
+///
+/// iced takes a multiple of the text size, which is the same unit the tokens
+/// use. Display type is set tight; running text is not.
+pub mod line {
+    /// Hero numbers and the dial's big label.
+    pub const TIGHT: f32 = 1.05;
+    /// Page and card titles.
+    pub const TITLE: f32 = 1.1;
+    /// Everything else.
+    pub const BODY: f32 = 1.5;
+    /// Long-form prose.
+    pub const DOC: f32 = 1.7;
 }
 
 #[cfg(test)]

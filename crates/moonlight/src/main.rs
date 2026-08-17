@@ -96,6 +96,7 @@ fn main() -> iced::Result {
         .theme(Moonlight::iced_theme)
         .window_size((1240.0, 820.0))
         .centered()
+        .decorations(false)
         .font(moonlight_design::FONT_BYTES[0])
         .font(moonlight_design::FONT_BYTES[1])
         .font(moonlight_design::FONT_BYTES[2])
@@ -226,6 +227,11 @@ pub enum Message {
     CloseConnection(String),
     CloseAllConnections,
 
+    DragWindow,
+    MinimiseWindow,
+    MaximiseWindow,
+    CloseWindow,
+
     /// From the controller.
     Controller(Event),
     /// One animation frame; drives the dial's sweep.
@@ -260,6 +266,8 @@ pub struct Moonlight {
     helper_installed: bool,
     update_status: Option<String>,
 
+    /// When the process started, for the halo's breath.
+    started: Instant,
     logs: Vec<LogEntry>,
     log_level: u8,
     log_filter: String,
@@ -324,6 +332,7 @@ impl Moonlight {
             import_field: String::new(),
             helper_installed: false,
             update_status: None,
+            started: Instant::now(),
             logs: Vec::new(),
             log_level: 1,
             log_filter: String::new(),
@@ -531,6 +540,19 @@ impl Moonlight {
             Message::CloseConnection(id) => send(Command::CloseConnection(id)),
             Message::CloseAllConnections => send(Command::CloseAllConnections),
 
+            // The window is undecorated, so moving, minimising, maximising and
+            // closing it are all this app's job.
+            Message::DragWindow => return with_window(iced::window::drag),
+            Message::MinimiseWindow => return with_window(|id| iced::window::minimize(id, true)),
+            Message::MaximiseWindow => return with_window(iced::window::toggle_maximize),
+            Message::CloseWindow => {
+                // Put the machine's proxy settings back before the window goes.
+                // Closing without this leaves every browser pointed at a core
+                // that is about to exit.
+                send(Command::Shutdown);
+                return with_window(iced::window::close);
+            }
+
             Message::Controller(event) => return self.apply(event),
             Message::Tick(_) => {
                 if self.transition_progress() >= 1.0 {
@@ -634,6 +656,13 @@ impl Moonlight {
         let palette = self.palette();
         let locale = self.locale();
 
+        // The connect screen is laid out to *fit* — the composition gives it
+        // `height:100%` and no scroller — so it is placed directly. Wrapping it
+        // in a scrollable gives its column an unbounded height, and every
+        // `Length::Fill` inside then expands into that infinity and squeezes the
+        // dial out of the layout entirely.
+        let scrolls = self.page != Page::Connect;
+
         let body = match self.page {
             Page::Connect => screens::connect::view(self),
             Page::Subscription => screens::subscription::view(self),
@@ -644,7 +673,7 @@ impl Moonlight {
             Page::Connections => screens::connections::view(self),
         };
 
-        let content = row![
+        let shell = row![
             screens::sidebar::view(
                 palette,
                 locale,
@@ -653,25 +682,44 @@ impl Moonlight {
                 &self.preferences,
                 &self.info,
             ),
-            container(
-                column![
-                    screens::header::view(self),
-                    scrollable(body)
-                        .height(Length::Fill)
-                        .style(move |theme, _| theme::scroller(palette, theme)),
-                ]
-                .spacing(18)
-            )
-            .padding(24)
+            screens::sidebar::rule(palette),
+            column![
+                screens::header::view(self),
+                screens::header::rule(palette),
+                container(if scrolls {
+                    Element::from(
+                        scrollable(body)
+                            .height(Length::Fill)
+                            .style(move |theme, _| theme::scroller(palette, theme)),
+                    )
+                } else {
+                    body
+                })
+                .height(Length::Fill)
+                // 20 above, 24 the rest of the way round, from the composition.
+                .padding(iced::Padding {
+                    top: 20.0,
+                    right: 24.0,
+                    bottom: 24.0,
+                    left: 24.0,
+                }),
+            ]
             .width(Length::Fill),
         ]
         .height(Length::Fill);
 
-        container(content)
-            .width(Length::Fill)
-            .height(Length::Fill)
-            .style(move |_| theme::page(palette))
-            .into()
+        container(
+            column![
+                screens::titlebar::view(self),
+                screens::titlebar::rule(palette),
+                shell,
+            ]
+            .height(Length::Fill),
+        )
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .style(move |_| theme::page(palette))
+        .into()
     }
 }
 
@@ -692,6 +740,19 @@ fn controller_events() -> impl iced::futures::Stream<Item = Message> {
         let event = rx.recv().await?;
         Some((Message::Controller(event), receiver))
     })
+}
+
+/// Runs a window operation against whichever window is current.
+///
+/// `window::latest()` answers with an `Option`, because a task can outlive the
+/// window it was queued for. There is exactly one window here, so `None` means
+/// it has already gone and the operation is simply dropped.
+fn with_window(
+    // `Fn`, not `FnOnce`: `and_then` may call it per item, and there is no way
+    // to move a captured `FnOnce` out of that closure.
+    operation: impl Fn(iced::window::Id) -> Task<Message> + Send + Sync + 'static,
+) -> Task<Message> {
+    iced::window::latest().and_then(operation)
 }
 
 fn send(command: Command) {
@@ -960,6 +1021,40 @@ impl Moonlight {
     }
     pub fn progress(&self) -> f32 {
         self.transition_progress()
+    }
+
+    /// 0…1 through the halo's breath cycle.
+    ///
+    /// Keyed off wall time rather than a counter, so the phase does not jump
+    /// when the tick cadence changes between one-per-second and one-per-frame.
+    pub fn breath(&self) -> f32 {
+        const CYCLE: f32 = 4.2;
+        let elapsed = self.started.elapsed().as_secs_f32();
+        (elapsed % CYCLE) / CYCLE
+    }
+
+    /// What Auto actually settled on — "Helsinki · 37 ms".
+    ///
+    /// `None` until a node has been picked, so the row falls back to describing
+    /// what Auto is *for* rather than claiming a choice it has not made.
+    pub fn auto_choice(&self) -> Option<String> {
+        if !self.preferences.auto_select {
+            return None;
+        }
+        // The lowest measured latency is the node Auto would land on, which is
+        // the same rule the injected url-test group follows.
+        let best = self
+            .nodes
+            .iter()
+            .filter(|n| !n.is_group)
+            .filter_map(|n| n.latency.map(|ms| (n, ms)))
+            .min_by_key(|(_, ms)| *ms)?;
+        Some(format!(
+            "{} {} · {}",
+            t(S::AutoPicked, self.locale()),
+            best.0.title(),
+            moonlight_core::format::latency(Some(best.1))
+        ))
     }
 
     /// Connections grouped by the process that opened them.

@@ -39,7 +39,7 @@ pub fn view(app: &Moonlight) -> Element<'_, Message> {
         )
         .on_press(Message::ClearLogs)
         .padding([9, 16])
-        .style(move |_, status| theme::ghost_button(palette, status)),
+        .style(move |_, status| theme::header_button(palette, status)),
     ]
     .align_y(Alignment::Center);
 

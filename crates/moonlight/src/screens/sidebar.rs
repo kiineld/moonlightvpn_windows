@@ -3,11 +3,11 @@
 //! It collapses to a 72pt icon rail; the wordmark is the toggle.
 
 use iced::widget::{button, canvas, column, container, row, text};
-use iced::{Alignment, Background, Border, Element, Length};
+use iced::{Alignment, Background, Element, Length};
 
 use moonlight_core::preferences::Preferences;
 use moonlight_core::{format, AppLocale, SubscriptionInfo};
-use moonlight_design::motion::radii;
+use moonlight_design::motion::{border, metrics, radii};
 use moonlight_design::typography::{scale, EMPHATIC};
 use moonlight_design::{icon, Icon, Palette};
 
@@ -16,9 +16,16 @@ use crate::localization::{t, S};
 use crate::logo::Logo;
 use crate::{hspace, theme, vspace, Message, Page};
 
-/// The collapsed rail's width, from the design.
-const RAIL: f32 = 72.0;
-const EXPANDED: f32 = 248.0;
+/// The collapsed rail and the full sidebar, from `tokens/spacing.css`.
+const RAIL: f32 = metrics::RAIL_COLLAPSED;
+const EXPANDED: f32 = metrics::RAIL;
+
+/// The wordmark. Smaller and lighter than the display steps: 17px at 700, from
+/// the composition — it labels the app rather than titling a page.
+const WORDMARK: f32 = 17.0;
+
+/// The logo tile.
+const MARK: f32 = 32.0;
 
 pub fn view<'a>(
     palette: Palette,
@@ -37,12 +44,17 @@ pub fn view<'a>(
 
     let content = column![
         wordmark(palette, collapsed),
-        vspace(Length::Fixed(18.0)),
         items,
         vspace(Length::Fill),
         quota(palette, locale, collapsed, preferences, info),
     ]
-    .padding(14)
+    .spacing(6)
+    .padding(iced::Padding {
+        top: 18.0,
+        right: 14.0,
+        bottom: 16.0,
+        left: 14.0,
+    })
     .width(Length::Fixed(width));
 
     container(content)
@@ -55,12 +67,27 @@ pub fn view<'a>(
         .into()
 }
 
+/// The rail's right-hand hairline, drawn as its own strip so it spans the full
+/// height rather than being clipped by the rail's padding.
+///
+/// Without it the deep-slate rail and the slate page meet at two values close
+/// enough to read as one uneven surface.
+pub fn rule<'a>(palette: Palette) -> Element<'a, Message> {
+    container(hspace(Length::Fixed(1.0)))
+        .height(Length::Fill)
+        .style(move |_| container::Style {
+            background: Some(Background::Color(palette.hairline)),
+            ..Default::default()
+        })
+        .into()
+}
+
 /// The logo and the wordmark, which together double as the collapse toggle —
 /// which is why this is a button rather than a label with a chevron beside it.
 fn wordmark<'a>(palette: Palette, collapsed: bool) -> Element<'a, Message> {
     let mark = canvas(Logo::new(palette))
-        .width(Length::Fixed(38.0))
-        .height(Length::Fixed(38.0));
+        .width(Length::Fixed(MARK))
+        .height(Length::Fixed(MARK));
 
     let inner: Element<'a, Message> = if collapsed {
         mark.into()
@@ -69,10 +96,10 @@ fn wordmark<'a>(palette: Palette, collapsed: bool) -> Element<'a, Message> {
             mark,
             text("moonlight")
                 .font(moonlight_design::display())
-                .size(scale::LEAD)
+                .size(WORDMARK)
                 .color(palette.text),
             hspace(Length::Fill),
-            icon(Icon::PanelLeftClose, 17.0, palette.text_muted),
+            icon(Icon::PanelLeftClose, 16.0, palette.text_muted),
         ]
         .spacing(10)
         .align_y(Alignment::Center)
@@ -81,7 +108,12 @@ fn wordmark<'a>(palette: Palette, collapsed: bool) -> Element<'a, Message> {
 
     button(inner)
         .on_press(Message::ToggleSidebar)
-        .padding(if collapsed { 4 } else { 8 })
+        .padding(iced::Padding {
+            top: 0.0,
+            right: 6.0,
+            bottom: 14.0,
+            left: 6.0,
+        })
         .width(Length::Fill)
         .style(move |_, status| theme::nav_button(palette, status))
         .into()
@@ -104,12 +136,12 @@ fn nav_item<'a>(
     };
 
     let inner: Element<'a, Message> = if collapsed {
-        icon(page.icon(), 20.0, ink)
+        icon(page.icon(), 19.0, ink)
     } else {
         row![
-            icon(page.icon(), 20.0, ink),
+            icon(page.icon(), 19.0, ink),
             text(t(page.title(), locale))
-                .size(scale::BODY)
+                .size(scale::BODY_SM)
                 .font(moonlight_design::ui(EMPHATIC))
                 .color(ink),
         ]
@@ -120,7 +152,8 @@ fn nav_item<'a>(
 
     button(inner)
         .on_press(Message::Navigate(page))
-        .padding([12, 14])
+        .height(Length::Fixed(metrics::NAV_ROW))
+        .padding([0, 12])
         .width(Length::Fill)
         .style(move |_, status| {
             if selected {
@@ -178,10 +211,10 @@ fn quota<'a>(
         .align_y(Alignment::Center),
         text(format::time_left(info.expire, locale))
             .font(moonlight_design::display())
-            .size(scale::PLAN)
+            .size(22.0)
             .color(palette.text),
     ]
-    .spacing(6);
+    .spacing(8);
 
     // The bar is only drawn for a plan that has a quota. An unlimited plan with
     // an empty bar under it reads as "nothing used of nothing".
@@ -194,21 +227,21 @@ fn quota<'a>(
             format::quota(info.used(), info.total, locale),
             t(S::OfTraffic, locale)
         ))
-        .size(scale::META)
-        .color(palette.text2),
+        .size(12.0)
+        .color(palette.text_muted),
     );
 
-    container(content)
+    // A button, not a card: it goes to the subscription screen, and the
+    // composition lifts its border to the accent on hover to say so.
+    button(content)
+        .on_press(Message::Navigate(Page::Subscription))
         .padding(14)
         .width(Length::Fill)
-        .style(move |_| container::Style {
-            background: Some(Background::Color(palette.surface)),
-            border: Border {
-                radius: iced::border::Radius::from(radii::CARD),
-                width: 1.0,
-                color: palette.hairline,
-            },
-            ..Default::default()
+        .style(move |_, status| {
+            let mut style = theme::outlined(palette, status);
+            style.border.radius = iced::border::Radius::from(radii::CARD_SM);
+            style.border.width = border::HAIRLINE;
+            style
         })
         .into()
 }
@@ -218,8 +251,11 @@ mod tests {
     use super::*;
 
     #[test]
-    fn the_collapsed_rail_is_the_width_the_design_specifies() {
-        assert_eq!(RAIL, 72.0);
+    fn the_rail_widths_come_from_the_tokens() {
+        // --ml-rail-w and --ml-rail-w-tablet. The Swift port had rounded these
+        // to 248 and 72, which is a 12px and a 4px drift from the design.
+        assert_eq!(EXPANDED, 236.0);
+        assert_eq!(RAIL, 76.0);
     }
 
     #[test]

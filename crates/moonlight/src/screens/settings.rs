@@ -80,7 +80,7 @@ fn tunnel(app: &Moonlight) -> Element<'_, Message> {
         )
         .on_press(helper_action.1)
         .padding([10, 16])
-        .style(move |_, status| theme::ghost_button(palette, status))
+        .style(move |_, status| theme::header_button(palette, status))
         .into(),
         palette,
     ));
@@ -195,7 +195,7 @@ fn application(app: &Moonlight) -> Element<'_, Message> {
             )
             .on_press(Message::CycleAppearance)
             .padding([10, 16])
-            .style(move |_, status| theme::ghost_button(palette, status))
+            .style(move |_, status| theme::header_button(palette, status))
             .into(),
             palette,
         ),
@@ -301,7 +301,7 @@ fn about(app: &Moonlight) -> Element<'_, Message> {
             )
             .on_press(Message::CheckForUpdates)
             .padding([10, 16])
-            .style(move |_, status| theme::ghost_button(palette, status)),
+            .style(move |_, status| theme::header_button(palette, status)),
         ]
         .align_y(Alignment::Center)
         .padding([14, 16]),

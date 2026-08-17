@@ -10,7 +10,40 @@ the same product on Xray-core.
 ![Connect screen](docs/screenshots/connect.png)
 
 The screenshot is the real app, built and run from this repository — on macOS,
-because iced runs there too. It is the same widget tree Windows builds.
+because iced runs there too. It is the same widget tree Windows builds, custom
+title bar and all.
+
+## The design is the source, not the screenshots
+
+The tokens, the composition and every metric in this client come from the
+Moonlight design system project, read directly rather than inferred from the
+macOS build. That found real drift the Swift port had introduced:
+
+| | Swift port | Design |
+|---|---|---|
+| Sidebar width | 248 | **236** (`--ml-rail-w`) |
+| Collapsed rail | 72 | **76** (`--ml-rail-w-tablet`) |
+| Input radius | 14 | **16** (`--ml-r-input`) |
+| Icon tile radius | 13 | **12** (`--ml-r-icon`) |
+| Card stack gap | 16 | **14** (`--ml-gap-stack`) |
+| Selected row | 13% lime wash | **`--ml-surface-2`** |
+
+The last one was the visible one. A selected server row painted with the accent
+wash composites to a dark olive over the panel, and the composition uses it
+nowhere: what carries the accent on a selected row is the row's **tile**, and the
+row itself goes to surface-2. The port had the two exactly backwards.
+
+The colour and motion tokens, by contrast, matched value for value — palette,
+the four accent roles, all four bézier curves and all three press scales.
+
+Two things the design specifies that only exist on Windows, and that the macOS
+client therefore has no counterpart for: an 8px window radius rather than 12,
+and a **custom title bar** — the logo, a left-aligned title with a status dot,
+and this app's own minimise / maximise / close controls. A native Windows caption
+is light grey with square corners against a `#0B111E` rail with 8px corners,
+which reads as a different application wearing this one as a skin. Drawing it
+means dragging and maximising become this app's job; `iced::window` provides
+both.
 
 ## Architecture
 

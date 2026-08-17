@@ -117,16 +117,82 @@ pub const PRESS_CARD: f32 = 0.985;
 pub const PRESS_BUTTON: f32 = 0.97;
 pub const PRESS_ICON: f32 = 0.92;
 
-/// Corner radii, matching `tokens/radii.css` usage in the desktop composition.
+/// Corner radii, from `tokens/radii.css`.
+///
+/// Role-based, not a t-shirt scale: a radius is chosen by what the element *is*,
+/// and it grows with the element's size. Nothing in the system is
+/// square-cornered, and every button is a full pill.
 pub mod radii {
+    /// The keyboard-shortcut chip under the dial. The one 7px corner in the
+    /// system, and the composition sets it literally.
     pub const CHIP: f32 = 7.0;
-    pub const FIELD: f32 = 14.0;
-    pub const TILE: f32 = 13.0;
+    /// 38px icon button.
+    pub const ICON_SM: f32 = 11.0;
+    /// 36–42px icon chip, header tile, avatar.
+    pub const ICON: f32 = 12.0;
+    /// 46px icon chip.
+    pub const ICON_LG: f32 = 14.0;
+    /// Input, link box, tab slot.
+    pub const FIELD: f32 = 16.0;
+    /// List row.
     pub const ROW: f32 = 18.0;
+    /// The stats strip and the sidebar quota card, which the composition sets
+    /// at 20 rather than at either neighbouring step.
+    pub const CARD_SM: f32 = 20.0;
+    /// The default card.
     pub const CARD: f32 = 22.0;
+    /// Subscription card.
+    pub const CARD_LG: f32 = 24.0;
+    /// The screen panels. `--ml-r-hero` is 28, but the desktop composition sets
+    /// its two big panels at 26, and the composition is what ships.
     pub const PANEL: f32 = 26.0;
-    pub const WINDOW: f32 = 12.0;
+    /// Accent hero slab.
+    pub const HERO: f32 = 28.0;
+    /// The window itself. macOS rounds at 12; Windows at 8.
+    pub const WINDOW: f32 = 8.0;
     pub const PILL: f32 = 999.0;
+}
+
+/// Border weights. A 1px hairline is the default; 1.5px marks selection or a
+/// focused input; 2px is only a tile.
+pub mod border {
+    pub const HAIRLINE: f32 = 1.0;
+    pub const SELECTED: f32 = 1.5;
+    pub const TILE: f32 = 2.0;
+}
+
+/// Shell metrics, from `tokens/spacing.css` and the desktop composition.
+pub mod metrics {
+    /// The desktop sidebar.
+    pub const RAIL: f32 = 236.0;
+    /// Collapsed to an icon rail.
+    pub const RAIL_COLLAPSED: f32 = 76.0;
+    /// The page header. The token says 56; the desktop composition sets 64.
+    pub const HEADER: f32 = 64.0;
+    /// The custom title bar.
+    pub const TITLE_BAR: f32 = 40.0;
+    /// A nav row.
+    pub const NAV_ROW: f32 = 44.0;
+    /// An icon button, and the sidebar logo tile.
+    pub const CONTROL_SM: f32 = 38.0;
+    /// A secondary control.
+    pub const CONTROL_MD: f32 = 46.0;
+    /// A primary button.
+    pub const CONTROL: f32 = 54.0;
+    pub const CONTROL_INPUT: f32 = 48.0;
+    /// The connect dial.
+    pub const DIAL: f32 = 238.0;
+    /// The stats strip under it.
+    pub const STATS_MAX: f32 = 420.0;
+
+    /// Between cards in a page column.
+    pub const GAP_STACK: f32 = 14.0;
+    /// Between the screen's own columns.
+    pub const GAP_COLUMNS: f32 = 16.0;
+    /// Between tiles in a grid.
+    pub const GAP_GRID: f32 = 12.0;
+    pub const PAD_CARD: f32 = 18.0;
+    pub const PAD_CARD_LG: f32 = 20.0;
 }
 
 #[cfg(test)]

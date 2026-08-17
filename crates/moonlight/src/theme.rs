@@ -10,7 +10,7 @@ use iced::border::Radius;
 use iced::widget::{button, container, scrollable, text_input};
 use iced::{Background, Border, Color, Shadow, Theme, Vector};
 
-use moonlight_design::motion::radii;
+use moonlight_design::motion::{border, radii};
 use moonlight_design::Palette;
 
 /// A colour at a given alpha, for the hover and press washes.
@@ -41,13 +41,17 @@ pub fn panel(palette: Palette) -> container::Style {
     }
 }
 
-/// A card inside a panel — the stat strip, the quota block.
+/// A card inside a panel — the stats strip, the traffic block.
+///
+/// Surface-2 with **no border and no shadow**. Moonlight is a flat system:
+/// elevation is carried by a surface's value, not by blur, so a card is a
+/// lighter slab and nothing else.
 pub fn card(palette: Palette) -> container::Style {
     container::Style {
         background: Some(Background::Color(palette.surface2)),
         text_color: Some(palette.text),
         border: Border {
-            radius: Radius::from(radii::CARD),
+            radius: Radius::from(radii::CARD_SM),
             width: 0.0,
             color: Color::TRANSPARENT,
         },
@@ -94,21 +98,66 @@ pub fn accent_button(palette: Palette, status: button::Status) -> button::Style 
     }
 }
 
-/// The quiet button: an outline that fills on hover. Hovers change colour and
-/// border, never scale.
-pub fn ghost_button(palette: Palette, status: button::Status) -> button::Style {
+/// The header's action buttons — *Пинг*, *Обновить*.
+///
+/// A surface fill with a hairline, and the **border** is what changes on hover;
+/// the fill stays put. That is the composition's rule, and it is what keeps a
+/// row of these from flashing as the pointer crosses them.
+///
+/// The label takes `accent_ink`, not `text`: these are the two accent actions on
+/// the page, and the design marks them by colouring the whole button rather than
+/// only its glyph.
+pub fn header_button(palette: Palette, status: button::Status) -> button::Style {
+    let border_color = match status {
+        button::Status::Hovered | button::Status::Pressed => palette.accent_line,
+        _ => palette.hairline,
+    };
+    button::Style {
+        background: Some(Background::Color(palette.surface)),
+        text_color: palette.accent_ink,
+        border: Border {
+            radius: Radius::from(radii::PILL),
+            width: border::HAIRLINE,
+            color: border_color,
+        },
+        shadow: Shadow::default(),
+        ..Default::default()
+    }
+}
+
+/// The round theme button. Surface-2, no border, and a text-2 glyph — it is not
+/// an accent action, so it does not take the accent.
+pub fn icon_button(palette: Palette, status: button::Status) -> button::Style {
     let background = match status {
-        button::Status::Hovered => alpha(palette.text, 0.06),
-        button::Status::Pressed => alpha(palette.text, 0.10),
-        _ => Color::TRANSPARENT,
+        button::Status::Hovered => palette.surface3,
+        _ => palette.surface2,
     };
     button::Style {
         background: Some(Background::Color(background)),
-        text_color: palette.text,
+        text_color: palette.text2,
         border: Border {
             radius: Radius::from(radii::PILL),
-            width: 1.0,
-            color: palette.hairline,
+            ..Default::default()
+        },
+        shadow: Shadow::default(),
+        ..Default::default()
+    }
+}
+
+/// A bordered button whose fill stays and whose border lifts — the sidebar quota
+/// card and the settings actions.
+pub fn outlined(palette: Palette, status: button::Status) -> button::Style {
+    let border_color = match status {
+        button::Status::Hovered | button::Status::Pressed => palette.accent_line,
+        _ => palette.hairline,
+    };
+    button::Style {
+        background: Some(Background::Color(palette.surface)),
+        text_color: palette.text,
+        border: Border {
+            radius: Radius::from(radii::CARD_SM),
+            width: border::HAIRLINE,
+            color: border_color,
         },
         shadow: Shadow::default(),
         ..Default::default()
@@ -136,13 +185,19 @@ pub fn nav_button(palette: Palette, status: button::Status) -> button::Style {
 }
 
 /// A row that behaves as a button but must not look like one.
+///
+/// Selection is **surface-2**, not the accent wash. 13% lime over the panel
+/// composites to a dark olive, and the composition uses it nowhere: what carries
+/// the accent on a selected row is the row's *tile*, not its background. Getting
+/// this backwards is what made the server list look mossy.
 pub fn row_button(palette: Palette, selected: bool, status: button::Status) -> button::Style {
     let background = if selected {
-        palette.accent_quiet
+        palette.surface2
     } else {
         match status {
-            button::Status::Hovered => alpha(palette.text, 0.05),
-            button::Status::Pressed => alpha(palette.text, 0.09),
+            // Hover is the same surface-2 the selection uses, which is why a
+            // selected row reads as "already there" rather than as highlighted.
+            button::Status::Hovered | button::Status::Pressed => palette.surface2,
             _ => Color::TRANSPARENT,
         }
     };
@@ -225,6 +280,17 @@ pub fn glow(color: Color) -> Shadow {
     }
 }
 
+/// The one glow in the system, reserved for the status dot and other tiny accent
+/// marks — `--ml-glow-lime-sm`. Never for a panel: this is a flat system, where
+/// elevation is a surface's value rather than a blur.
+pub fn glow_sm(color: Color) -> Shadow {
+    Shadow {
+        color: alpha(color, 0.5),
+        offset: Vector::ZERO,
+        blur_radius: 34.0,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -242,13 +308,59 @@ mod tests {
     }
 
     #[test]
-    fn a_hover_changes_colour_and_never_geometry() {
-        // The motion tokens allow a press to shrink; a hover may only repaint.
-        let active = ghost_button(Palette::DARK, button::Status::Active);
-        let hovered = ghost_button(Palette::DARK, button::Status::Hovered);
-        assert_ne!(active.background, hovered.background);
+    fn a_header_button_lifts_its_border_and_keeps_its_fill() {
+        // The composition changes the border on hover, not the background —
+        // which is what keeps a row of these from flashing as the pointer
+        // crosses them.
+        let active = header_button(Palette::DARK, button::Status::Active);
+        let hovered = header_button(Palette::DARK, button::Status::Hovered);
+        assert_eq!(active.background, hovered.background);
+        assert_ne!(active.border.color, hovered.border.color);
+        assert_eq!(hovered.border.color, Palette::DARK.accent_line);
+        // And the geometry never moves.
         assert_eq!(active.border.radius, hovered.border.radius);
         assert_eq!(active.border.width, hovered.border.width);
+    }
+
+    #[test]
+    fn a_header_button_labels_itself_in_the_accent() {
+        assert_eq!(
+            header_button(Palette::DARK, button::Status::Active).text_color,
+            Palette::DARK.accent_ink
+        );
+    }
+
+    #[test]
+    fn the_theme_button_is_not_an_accent_action() {
+        // Surface-2 with a text-2 glyph. Colouring it like Пинг and Обновить
+        // would claim it does something to the tunnel.
+        let style = icon_button(Palette::DARK, button::Status::Active);
+        assert_eq!(style.text_color, Palette::DARK.text2);
+        assert_eq!(style.border.width, 0.0);
+    }
+
+    #[test]
+    fn a_selected_row_is_surface_two_and_never_the_accent_wash() {
+        // 13% lime over the panel composites to a dark olive, and the
+        // composition uses it nowhere. The accent on a selected row is carried
+        // by its tile.
+        let selected = row_button(Palette::DARK, true, button::Status::Active);
+        assert_eq!(
+            selected.background,
+            Some(Background::Color(Palette::DARK.surface2))
+        );
+        assert_ne!(
+            selected.background,
+            Some(Background::Color(Palette::DARK.accent_quiet))
+        );
+    }
+
+    #[test]
+    fn a_card_carries_no_border_and_no_shadow() {
+        // Flat system: elevation is a surface value, not a blur.
+        let style = card(Palette::DARK);
+        assert_eq!(style.border.width, 0.0);
+        assert_eq!(style.shadow.blur_radius, 0.0);
     }
 
     #[test]
@@ -256,6 +368,16 @@ mod tests {
         let hovered = row_button(Palette::DARK, true, button::Status::Hovered);
         let active = row_button(Palette::DARK, true, button::Status::Active);
         assert_eq!(hovered.background, active.background);
+    }
+
+    #[test]
+    fn an_input_takes_the_field_radius_the_tokens_name() {
+        assert_eq!(
+            field(Palette::DARK, text_input::Status::Active)
+                .border
+                .radius,
+            Radius::from(radii::FIELD)
+        );
     }
 
     #[test]

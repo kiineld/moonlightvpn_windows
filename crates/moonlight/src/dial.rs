@@ -14,8 +14,16 @@ use iced::{mouse, Color, Point, Rectangle, Renderer, Theme};
 use moonlight_core::ConnectionState;
 use moonlight_design::Palette;
 
-/// How thick the ring is drawn, in points.
-const RING_WIDTH: f32 = 3.0;
+/// The sweep's thickness. The composition masks a conic gradient to a 6px ring.
+const SWEEP_WIDTH: f32 = 6.0;
+
+/// The track under it, which is thinner — 2px of hairline. Drawing both at one
+/// weight loses the distinction between "the dial's extent" and "how far round
+/// it has gone".
+const TRACK_WIDTH: f32 = 2.0;
+
+/// The halo sits 10px outside the dial and breathes while connected.
+const HALO_INSET: f32 = 10.0;
 
 /// The ring starts at twelve o'clock rather than at three, which is where a
 /// canvas's zero angle sits.
@@ -26,17 +34,31 @@ pub struct Dial {
     pub palette: Palette,
     /// 0…1 through the connecting animation; ignored in every other state.
     pub progress: f32,
+    /// 0…1 through the halo's 4.2s breath. Only read while connected.
+    pub breath: f32,
     pub cache: Cache,
 }
 
 impl Dial {
-    pub fn new(state: ConnectionState, palette: Palette, progress: f32) -> Self {
+    pub fn new(state: ConnectionState, palette: Palette, progress: f32, breath: f32) -> Self {
         Dial {
             state,
             palette,
             progress,
+            breath,
             cache: Cache::new(),
         }
+    }
+
+    /// The halo's opacity. Zero unless connected, and it breathes between a half
+    /// and a quarter — the composition runs it at .5 with a 4.2s cycle.
+    pub fn halo_opacity(&self) -> f32 {
+        if !self.state.is_connected() {
+            return 0.0;
+        }
+        let phase = (self.breath.clamp(0.0, 1.0) * std::f32::consts::TAU).cos();
+        // cos runs [-1,1]; map it onto [0.25, 0.5].
+        0.375 + phase * 0.125
     }
 
     /// The fraction of the ring that is drawn, and in what colour.
@@ -71,9 +93,24 @@ impl<Message> canvas::Program<Message> for Dial {
     ) -> Vec<Geometry> {
         let geometry = self.cache.draw(renderer, bounds.size(), |frame| {
             let centre = Point::new(frame.width() / 2.0, frame.height() / 2.0);
-            let radius = (frame.width().min(frame.height()) / 2.0) - RING_WIDTH;
+            // The halo lives outside the dial, so the dial's own radius is inset
+            // by it as well as by half the sweep.
+            let outer = frame.width().min(frame.height()) / 2.0;
+            let radius = outer - HALO_INSET - SWEEP_WIDTH / 2.0;
             if radius <= 0.0 {
                 return;
+            }
+
+            // The halo: a single hairline ring, 10px out, breathing.
+            let halo = self.halo_opacity();
+            if halo > 0.0 {
+                frame.stroke(
+                    &Path::circle(centre, radius + HALO_INSET),
+                    Stroke::default().with_width(1.0).with_color(Color {
+                        a: halo,
+                        ..self.palette.accent
+                    }),
+                );
             }
 
             // The track is always drawn, so the ring reads as a dial with a
@@ -81,7 +118,7 @@ impl<Message> canvas::Program<Message> for Dial {
             frame.stroke(
                 &Path::circle(centre, radius),
                 Stroke::default()
-                    .with_width(RING_WIDTH)
+                    .with_width(TRACK_WIDTH)
                     .with_color(self.palette.hairline),
             );
 
@@ -101,7 +138,7 @@ impl<Message> canvas::Program<Message> for Dial {
             frame.stroke(
                 &arc,
                 Stroke::default()
-                    .with_width(RING_WIDTH)
+                    .with_width(SWEEP_WIDTH)
                     .with_color(color)
                     // Round caps, so a partial sweep does not end in a hard
                     // chisel that reads as a broken ring.
@@ -118,7 +155,7 @@ mod tests {
     use super::*;
 
     fn dial(state: ConnectionState, progress: f32) -> Dial {
-        Dial::new(state, Palette::DARK, progress)
+        Dial::new(state, Palette::DARK, progress, 0.0)
     }
 
     #[test]
@@ -163,6 +200,50 @@ mod tests {
         let (fraction, color) = dial(ConnectionState::Failed("x".into()), 0.0).sweep();
         assert_eq!(fraction, 1.0);
         assert_eq!(color, Palette::DARK.danger);
+    }
+
+    #[test]
+    fn the_sweep_and_the_track_are_the_weights_the_composition_sets() {
+        // One weight for both loses the distinction between the dial's extent
+        // and how far round it has gone. The composition masks its conic
+        // gradient to 6px and draws the track under it at 2.
+        assert_eq!(SWEEP_WIDTH, 6.0);
+        assert_eq!(TRACK_WIDTH, 2.0);
+    }
+
+    #[test]
+    fn the_halo_is_dark_unless_connected() {
+        for state in [
+            ConnectionState::Disconnected,
+            ConnectionState::Connecting,
+            ConnectionState::Failed("x".into()),
+        ] {
+            assert_eq!(
+                Dial::new(state, Palette::DARK, 0.5, 0.5).halo_opacity(),
+                0.0
+            );
+        }
+    }
+
+    #[test]
+    fn the_halo_breathes_without_ever_going_out_or_solid() {
+        // A halo that reaches zero reads as a flicker, and one that reaches full
+        // competes with the sweep.
+        let mut seen_low = f32::MAX;
+        let mut seen_high = f32::MIN;
+        for i in 0..=100 {
+            let o = Dial::new(
+                ConnectionState::Connected,
+                Palette::DARK,
+                1.0,
+                i as f32 / 100.0,
+            )
+            .halo_opacity();
+            seen_low = seen_low.min(o);
+            seen_high = seen_high.max(o);
+        }
+        assert!(seen_low > 0.2, "dipped to {seen_low}");
+        assert!(seen_high < 0.55, "peaked at {seen_high}");
     }
 
     #[test]

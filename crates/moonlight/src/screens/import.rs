@@ -47,7 +47,7 @@ pub fn view(app: &Moonlight) -> Element<'_, Message> {
     .on_press(Message::PasteFromClipboard)
     .padding([14, 18])
     .width(Length::Fill)
-    .style(move |_, status| theme::ghost_button(palette, status));
+    .style(move |_, status| theme::header_button(palette, status));
 
     let mut content = column![
         text(t(S::ImportHelp, locale))
