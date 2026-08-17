@@ -120,11 +120,14 @@ jobs:
 
             Everything is wired: the tunnel controller drives the core, writes
             the proxy settings and talks to the helper, and all seven screens
-            are real. What has not happened is a person sitting in front of it
-            on Windows — CI exercises the registry, the service, the named pipe
-            and a live mihomo core on a Windows runner, but no session has been
-            left connected carrying a machine's own traffic. See *What is not
-            done yet* in the README.
+            are real. The interface has now been driven on real Windows
+            hardware and corrected against the macOS client screen by screen.
+
+            What still has not happened is a **live tunnel**: CI exercises the
+            registry, the service, the named pipe and a real mihomo core on a
+            Windows runner, but no session has been left connected carrying a
+            machine's own traffic, and TUN has never created a Wintun adapter.
+            See *What is not done yet* in the README.
 
             | File | |
             |---|---|
