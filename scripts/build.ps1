@@ -11,6 +11,7 @@ Set-Location (Join-Path $PSScriptRoot '..')
 & $PSScriptRoot\fetch-fonts.ps1
 & $PSScriptRoot\fetch-mihomo.ps1
 & $PSScriptRoot\fetch-flags.ps1
+& $PSScriptRoot\fetch-geodata.ps1
 
 cargo build --release --target x86_64-pc-windows-msvc
 
@@ -29,5 +30,11 @@ Copy-Item LICENSE.md                     $dist
 # embedded, so 249 pictures cost nothing in the binary.
 New-Item -ItemType Directory -Force -Path "$dist\flags" | Out-Null
 Copy-Item resources\flags\*.png "$dist\flags"
+
+# The geo databases. The helper stages these into %ProgramData% at install, and
+# the app seeds its own copy from them, so neither core has to download anything
+# on the connect that needs them.
+New-Item -ItemType Directory -Force -Path "$dist\geodata" | Out-Null
+Copy-Item resources\geodata\* "$dist\geodata"
 
 Get-ChildItem $dist

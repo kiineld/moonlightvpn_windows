@@ -63,6 +63,14 @@ pub async fn ensure(directory: &Path) -> Result<bool, String> {
     }
     std::fs::create_dir_all(directory).map_err(|e| e.to_string())?;
 
+    // The build ships a copy beside the executable. Copying it costs nothing and
+    // spares the first connect a 13 MB download on a link that may well be the
+    // reason the user wants a VPN.
+    seed_from_install(directory);
+    if present(directory) {
+        return Ok(false);
+    }
+
     // Generous: these are 4 MB and 17 MB, and the connect they are blocking has
     // no chance of working without them.
     let http = reqwest::Client::builder()
@@ -80,6 +88,26 @@ pub async fn ensure(directory: &Path) -> Result<bool, String> {
         downloaded = true;
     }
     Ok(downloaded)
+}
+
+/// Copies the databases shipped with the build into the core's data directory.
+///
+/// Best effort: a portable copy assembled by hand may not have them, and the
+/// download is still there for that.
+fn seed_from_install(directory: &Path) {
+    let Ok(exe) = std::env::current_exe() else {
+        return;
+    };
+    let Some(shipped) = exe.parent().map(|d| d.join("geodata")) else {
+        return;
+    };
+    for name in [GEOSITE_FILE, GEOIP_FILE] {
+        let from = shipped.join(name);
+        let to = directory.join(name);
+        if from.is_file() && !is_usable(&to) {
+            let _ = std::fs::copy(&from, &to);
+        }
+    }
 }
 
 /// Fetches one file, writing through a temporary so an interrupted download

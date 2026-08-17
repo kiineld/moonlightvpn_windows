@@ -155,24 +155,106 @@ mod client {
 
     /// Whether the service is installed on this machine.
     pub fn is_installed() -> bool {
+        status().is_some()
+    }
+
+    /// Whether the service is not merely registered but actually **running**.
+    ///
+    /// TUN depends on the pipe, and the pipe only exists while the service is
+    /// up. A registered-but-stopped service passed `is_installed`, so the app
+    /// offered TUN and then failed at connect with a bare `os error 2` from the
+    /// pipe open — which names a missing file and explains nothing.
+    pub fn is_running() -> bool {
+        use windows::Win32::System::Services::SERVICE_RUNNING;
+        status() == Some(SERVICE_RUNNING.0)
+    }
+
+    /// Starts the service and waits for it to be running.
+    ///
+    /// Unelevated: `--install` grants the interactive user start and stop rights
+    /// on the service precisely so this needs no UAC prompt. Returns whether the
+    /// service is running when it gives up waiting, so an already-running
+    /// service is a success rather than an error.
+    pub fn start() -> bool {
         use windows::core::HSTRING;
         use windows::Win32::System::Services::{
-            CloseServiceHandle, OpenSCManagerW, OpenServiceW, SC_MANAGER_CONNECT,
-            SERVICE_QUERY_STATUS,
+            CloseServiceHandle, OpenSCManagerW, OpenServiceW, StartServiceW, SC_MANAGER_CONNECT,
+            SERVICE_QUERY_STATUS, SERVICE_START,
         };
 
+        if is_running() {
+            return true;
+        }
         unsafe {
             let Ok(manager) = OpenSCManagerW(None, None, SC_MANAGER_CONNECT) else {
                 return false;
             };
             let name = HSTRING::from(SERVICE_NAME);
-            let service = OpenServiceW(manager, &name, SERVICE_QUERY_STATUS);
-            let installed = service.is_ok();
-            if let Ok(service) = service {
+            let opened = OpenServiceW(manager, &name, SERVICE_START | SERVICE_QUERY_STATUS);
+            if let Ok(service) = opened {
+                let _ = StartServiceW(service, None);
                 let _ = CloseServiceHandle(service);
             }
             let _ = CloseServiceHandle(manager);
-            installed
+        }
+        // Starting is asynchronous — the call returns once the SCM accepts it.
+        for _ in 0..40 {
+            if is_running() {
+                return true;
+            }
+            std::thread::sleep(Duration::from_millis(100));
+        }
+        is_running()
+    }
+
+    /// Stops the service, so it is not left holding a privileged core after the
+    /// app that asked for it has gone.
+    pub fn stop() {
+        use windows::core::HSTRING;
+        use windows::Win32::System::Services::{
+            CloseServiceHandle, ControlService, OpenSCManagerW, OpenServiceW, SERVICE_CONTROL_STOP,
+            SERVICE_STATUS, SC_MANAGER_CONNECT, SERVICE_STOP,
+        };
+
+        unsafe {
+            let Ok(manager) = OpenSCManagerW(None, None, SC_MANAGER_CONNECT) else {
+                return;
+            };
+            let name = HSTRING::from(SERVICE_NAME);
+            if let Ok(service) = OpenServiceW(manager, &name, SERVICE_STOP) {
+                let mut status = SERVICE_STATUS::default();
+                let _ = ControlService(service, SERVICE_CONTROL_STOP, &mut status);
+                let _ = CloseServiceHandle(service);
+            }
+            let _ = CloseServiceHandle(manager);
+        }
+    }
+
+    /// The service's current state, or `None` when it is not registered at all.
+    fn status() -> Option<u32> {
+        use windows::core::HSTRING;
+        use windows::Win32::System::Services::{
+            CloseServiceHandle, OpenSCManagerW, OpenServiceW, QueryServiceStatus, SERVICE_STATUS,
+            SC_MANAGER_CONNECT, SERVICE_QUERY_STATUS,
+        };
+
+        unsafe {
+            let manager = OpenSCManagerW(None, None, SC_MANAGER_CONNECT).ok()?;
+            let name = HSTRING::from(SERVICE_NAME);
+            let service = OpenServiceW(manager, &name, SERVICE_QUERY_STATUS);
+            let state = match service {
+                Ok(service) => {
+                    let mut status = SERVICE_STATUS::default();
+                    let state = QueryServiceStatus(service, &mut status)
+                        .is_ok()
+                        .then_some(status.dwCurrentState.0);
+                    let _ = CloseServiceHandle(service);
+                    state
+                }
+                Err(_) => None,
+            };
+            let _ = CloseServiceHandle(manager);
+            state
         }
     }
 
@@ -222,6 +304,16 @@ mod client {
     pub fn is_installed() -> bool {
         false
     }
+
+    pub fn is_running() -> bool {
+        false
+    }
+
+    pub fn start() -> bool {
+        false
+    }
+
+    pub fn stop() {}
 
     pub fn send(_request: &Request, _timeout: Duration) -> Result<Response, String> {
         Err("The privileged helper exists only on Windows".to_string())

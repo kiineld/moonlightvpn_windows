@@ -314,7 +314,22 @@ impl Controller {
             self.preferences.clone(),
         )));
 
-        // 3. Now it is safe to warm a core.
+        // 3. Last session's servers, straight away.
+        //
+        //    A refresh is a subscription fetch and a core start — seconds, on a
+        //    link the user may be opening the app precisely because it is bad.
+        //    The list used to sit empty for all of it, on a screen whose whole
+        //    job is picking from that list. The cached one is replaced the
+        //    moment the real one arrives.
+        if self.preferences.subscription_url.is_some() {
+            if let Some(nodes) = cached_nodes() {
+                if !nodes.is_empty() {
+                    self.emit(Event::Nodes(nodes));
+                }
+            }
+        }
+
+        // 4. Now it is safe to warm a core.
         if self.preferences.subscription_url.is_some() {
             self.refresh().await;
         }
@@ -560,6 +575,7 @@ impl Controller {
         let live: Vec<String> = nodes.iter().map(|n| n.name.clone()).collect();
         self.preferences.prune_latencies(&live);
         self.save();
+        cache_nodes(&nodes);
 
         // Nothing measured yet means every row would read as a dash until the
         // user found the Пинг button. Measuring once, here, is what makes the
@@ -928,6 +944,9 @@ impl Controller {
         // exactly the state people notice as "it did not close the helper".
         let _ = helper::send(&Request::Stop, Duration::from_secs(10));
         self.core.lock().await.stop().await;
+        // The service exists to serve this app, so it goes when the app does
+        // rather than idling as a LocalSystem process until the next reboot.
+        helper::stop();
         self.emit(Event::ShutdownComplete);
     }
 
@@ -945,6 +964,26 @@ impl Controller {
             app_version: env!("CARGO_PKG_VERSION").to_string(),
         }
     }
+}
+
+/// Where the last known server list is kept, so the next launch has something
+/// to draw before the network answers.
+fn nodes_cache_path() -> std::path::PathBuf {
+    crate::preferences::support_directory().join("nodes.json")
+}
+
+/// Best effort in both directions: this is a convenience, never a source of
+/// truth. A stale or unreadable cache costs a moment of the old list, and the
+/// real one replaces it either way.
+fn cache_nodes(nodes: &[Node]) {
+    if let Ok(text) = serde_json::to_string(nodes) {
+        let _ = std::fs::write(nodes_cache_path(), text);
+    }
+}
+
+fn cached_nodes() -> Option<Vec<Node>> {
+    let text = std::fs::read_to_string(nodes_cache_path()).ok()?;
+    serde_json::from_str(&text).ok()
 }
 
 /// mihomo prefixes its lines with a level; anything else reads as INFO.

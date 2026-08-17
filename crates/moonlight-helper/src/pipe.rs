@@ -10,19 +10,36 @@
 //! reaches a single line of the code below.
 //!
 //! ```text
-//! D:(A;;GA;;;BA)(A;;GA;;;SY)
-//!    │    │   │
-//!    │    │   └─ BA = BUILTIN\Administrators, SY = NT AUTHORITY\SYSTEM
+//! D:(A;;GA;;;SY)(A;;GA;;;BA)(A;;GRGW;;;IU)
+//!    │    │   │                  │     │
+//!    │    │   │                  │     └─ IU = interactive users
+//!    │    │   │                  └─────── GENERIC_READ | GENERIC_WRITE
+//!    │    │   └─ SY = NT AUTHORITY\SYSTEM, BA = BUILTIN\Administrators
 //!    │    └───── GA = GENERIC_ALL
 //!    └────────── A  = allow
 //! ```
 //!
-//! `D:` with no inheritance flags means the DACL is exactly these two entries —
-//! no implicit Everyone, no inherited grants. This is the counterpart of the
-//! macOS client's `0660 root:admin` socket, and it buys the same thing: callers
-//! are exactly the accounts that could already elevate, so the user is spared a
-//! prompt per connect. It is deliberately *not* a boundary against an
-//! administrator, and nothing here pretends otherwise.
+//! `D:` with no inheritance flags means the DACL is exactly these entries — no
+//! implicit Everyone, no inherited grants.
+//!
+//! **The interactive-user entry is load-bearing, and was missing.** The DACL
+//! used to be `BA` and `SY` alone, copied from the macOS client's
+//! `0660 root:admin` socket. That reasoning does not carry across: on macOS the
+//! admin *group* is what the check is against, and a member has it always. On
+//! Windows an administrator's ordinary token has the Administrators group marked
+//! deny-only, and only an elevated one carries it for access checks. The app is
+//! not elevated — that is the entire point of the service existing — so it was
+//! denied by its own helper on every connect, with `os error 5`. The pipe had
+//! never been openable by the process it was built for.
+//!
+//! So the person at the keyboard is granted read and write, which is what a
+//! client needs and nothing more: no `WRITE_DAC`, no ability to re-ACL the pipe
+//! or to create a second instance under the same name.
+//!
+//! What this is not: a boundary against a local administrator, or against
+//! another program running as the same user. Anything that can open the pipe can
+//! ask the service to run a core, so [`moonlight_core::helper::validate`] on the
+//! privileged side — not the DACL — is what constrains *what* may be asked.
 
 use std::io::{BufRead, BufReader, Read, Write};
 
@@ -42,8 +59,8 @@ use moonlight_core::helper::{
     decode_request, encode_response, Response, MAX_REQUEST_BYTES, PIPE_NAME,
 };
 
-/// Administrators and SYSTEM, and nobody else.
-const SDDL: &str = "D:(A;;GA;;;BA)(A;;GA;;;SY)";
+/// SYSTEM and administrators in full; the signed-in user enough to talk to it.
+const SDDL: &str = "D:(A;;GA;;;SY)(A;;GA;;;BA)(A;;GRGW;;;IU)";
 
 const BUFFER: u32 = 64 * 1024;
 
@@ -90,6 +107,19 @@ impl Drop for Descriptor {
 /// One connection at a time, deliberately: the service has exactly one core to
 /// manage, and concurrent callers racing to start and stop it is a state machine
 /// nobody needs. A second caller waits.
+/// Unblocks a `serve` loop that is waiting for a client.
+///
+/// `ConnectNamedPipe` has no timeout and no cancellation short of closing the
+/// handle from another thread, so the way to end the wait is to become the
+/// client it was waiting for. The connection is dropped immediately; the server
+/// reads nothing, returns to the top of the loop, and sees the stop flag.
+pub fn wake() {
+    let _ = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(PIPE_NAME);
+}
+
 pub fn serve<F, S>(mut handle_request: F, should_stop: S)
 where
     F: FnMut(&moonlight_core::helper::Request) -> Response,
