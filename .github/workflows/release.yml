@@ -64,14 +64,53 @@ jobs:
           }
           Remove-Item $pfx -Force
 
-      # Three assets, because they answer different questions:
-      #   - the zip is what a person downloads, and carries the core, the Wintun
-      #     driver and the licence alongside the app
-      #   - the two bare .exe files are for anyone who already has the rest and
-      #     wants to replace one binary
+      # The installer is the one most people should take: it puts the app, the
+      # core, the Wintun driver and the helper in one place, and registers the
+      # TUN service while it already has the elevation to do so.
+      #
+      # ISCC ships on the windows runner image; the fallback is there so a change
+      # to that image costs a slow install rather than a failed release.
+      - name: Installer
+        run: |
+          $iscc = 'C:\Program Files (x86)\Inno Setup 6\ISCC.exe'
+          if (-not (Test-Path $iscc)) {
+            choco install innosetup --no-progress -y
+          }
+          if (-not (Test-Path $iscc)) { throw "ISCC not found at $iscc" }
+          # A manual run's ref_name is a branch, not a tag, and Inno stamps this
+          # into the binary's version resource — which must be numeric.
+          $version = '${{ github.ref_name }}' -replace '^v', ''
+          if ($version -notmatch '^\d+(\.\d+){0,3}$') { $version = '0.0.0' }
+          & $iscc "/DAppVersion=$version" installer\moonlight.iss
+          if ($LASTEXITCODE -ne 0) { throw "ISCC failed ($LASTEXITCODE)" }
+          Copy-Item installer-out\Moonlight-Setup.exe Moonlight-Setup.exe
+
+      # Four assets, because they answer different questions:
+      #   - the installer is the default route: one file, sets everything up
+      #   - the zip is the portable layout, for anyone who does not want an
+      #     installer or cannot elevate
+      #   - the two bare .exe files are for replacing a single binary in place
       #
       # None of the names carry a version, so the latest-release URLs keep
       # working across releases — the version is in the release title.
+      # The installer carries the signed binaries but is itself a new executable,
+      # so it needs its own signature or SmartScreen warns on the one file most
+      # people will actually run.
+      - name: Sign installer
+        if: ${{ env.SIGNING_CERTIFICATE != '' }}
+        env:
+          SIGNING_CERTIFICATE: ${{ secrets.SIGNING_CERTIFICATE }}
+          SIGNING_PASSWORD: ${{ secrets.SIGNING_PASSWORD }}
+        run: |
+          $pfx = Join-Path $env:RUNNER_TEMP 'signing.pfx'
+          [IO.File]::WriteAllBytes($pfx, [Convert]::FromBase64String($env:SIGNING_CERTIFICATE))
+          $signtool = Get-ChildItem "${env:ProgramFiles(x86)}\Windows Kits\10\bin" -Recurse -Filter signtool.exe |
+            Where-Object { $_.FullName -match 'x64' } | Select-Object -First 1
+          & $signtool.FullName sign /fd SHA256 /f $pfx /p $env:SIGNING_PASSWORD `
+            /tr http://timestamp.digicert.com /td SHA256 Moonlight-Setup.exe
+          if ($LASTEXITCODE -ne 0) { throw "signing the installer failed" }
+          Remove-Item $pfx -Force
+
       - name: Package
         run: |
           Compress-Archive -Path dist\Moonlight\* -DestinationPath Moonlight-x86_64.zip
@@ -85,7 +124,7 @@ jobs:
       # directory" while the hashes themselves are perfectly correct.
       - name: Checksums
         run: |
-          $lines = Get-FileHash Moonlight-x86_64.zip, Moonlight.exe, Moonlight-Helper.exe -Algorithm SHA256 |
+          $lines = Get-FileHash Moonlight-Setup.exe, Moonlight-x86_64.zip, Moonlight.exe, Moonlight-Helper.exe -Algorithm SHA256 |
             ForEach-Object { "$($_.Hash.ToLower())  $(Split-Path $_.Path -Leaf)" }
           [System.IO.File]::WriteAllText(
             "$PWD\SHA256SUMS.txt",
@@ -109,6 +148,7 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/')
         with:
           files: |
+            Moonlight-Setup.exe
             Moonlight-x86_64.zip
             Moonlight.exe
             Moonlight-Helper.exe
@@ -131,8 +171,9 @@ jobs:
 
             | File | |
             |---|---|
-            | `Moonlight-x86_64.zip` | The app, the mihomo core, `wintun.dll` and the licence. Start here. |
-            | `Moonlight.exe` | The app alone. |
+            | `Moonlight-Setup.exe` | **Start here.** Installs the app, the core and the driver, and registers the TUN service in the same elevation. |
+            | `Moonlight-x86_64.zip` | The same files as a portable folder, for anyone who would rather not run an installer. |
+            | `Moonlight.exe` | The app alone. TUN needs `moonlight-helper.exe` beside it, so this is for replacing one binary, not for a first install. |
             | `Moonlight-Helper.exe` | The privileged service alone. |
 
             Windows 10 1809 or later, x64.

@@ -85,12 +85,29 @@ fn tunnel(app: &Moonlight) -> Element<'_, Message> {
         palette,
     ));
 
-    column![
+    let mut section = column![
         components::overline(t(S::SectionTunnel, locale), palette),
         vspace(Length::Fixed(12.0)),
         components::surface(panel, palette),
-    ]
-    .into()
+    ];
+
+    // A refused UAC prompt, or a missing moonlight-helper.exe, has to say so
+    // *here* — beside the button that failed. The connect screen carries the
+    // tunnel's errors, and a user who pressed Установить службу never goes
+    // looking there for the reason nothing happened.
+    if let Some(error) = app.last_error() {
+        section = section.push(vspace(Length::Fixed(10.0)));
+        section = section.push(
+            container(
+                text(error.to_string())
+                    .size(scale::META)
+                    .color(palette.danger),
+            )
+            .padding([0, 4]),
+        );
+    }
+
+    section.into()
 }
 
 /// A radio row. The mark is drawn rather than using iced's radio, because that

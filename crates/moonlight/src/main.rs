@@ -28,6 +28,7 @@ use moonlight_core::subscription::Source;
 use moonlight_core::{
     AppEntry, AppLocale, ConnectionState, Node, SplitMode, SubscriptionInfo, TunnelMode,
 };
+use moonlight_design::motion::{self, dur, Curve};
 use moonlight_design::{Appearance, Palette};
 
 use localization::{t, S};
@@ -223,6 +224,7 @@ pub enum Message {
     InstallHelper,
     RemoveHelper,
     HelperChanged(bool),
+    HelperAttempted(Result<bool, String>),
     CheckForUpdates,
     UpdateChecked(String),
     OpenUrl(&'static str),
@@ -235,6 +237,7 @@ pub enum Message {
     CloseAllConnections,
 
     DragWindow,
+    ResizeWindow(iced::window::Direction),
     MinimiseWindow,
     MaximiseWindow,
     CloseWindow,
@@ -285,6 +288,12 @@ pub struct Moonlight {
     connections: Vec<Connection>,
 
     sidebar_collapsed: bool,
+    /// When the current screen appeared, for its entrance. Set by anything that
+    /// replaces the content wholesale — a page change, a language switch, and
+    /// the first frame after launch.
+    page_started: Option<Instant>,
+    /// When the rail last started opening or closing, for its width glide.
+    sidebar_started: Option<Instant>,
     /// Off in tests, so preference changes stay in memory.
     persist: bool,
 }
@@ -355,6 +364,10 @@ impl Moonlight {
             log_filter: String::new(),
             connections: Vec::new(),
             sidebar_collapsed,
+            // Non-None from the start, so the first screen rises in rather than
+            // being simply present when the window appears.
+            page_started: Some(Instant::now()),
+            sidebar_started: None,
             persist: true,
         }
     }
@@ -396,6 +409,45 @@ impl Moonlight {
     }
 
     /// 0…1 through the current transition.
+    /// How far a screen is through its entrance, eased.
+    ///
+    /// The design's `ml-rise` is an 18px lift paired with a fade. iced has no
+    /// opacity for an arbitrary element — only images and SVGs carry one — so
+    /// this is the lift alone rather than a fade faked by threading an alpha
+    /// through every colour on every screen.
+    fn page_rise(&self) -> f32 {
+        const TRAVEL: f32 = 18.0;
+        let Some(started) = self.page_started else {
+            return 0.0;
+        };
+        let linear = motion::progress(started.elapsed(), dur::ENTER);
+        TRAVEL * (1.0 - Curve::RISE.at(linear))
+    }
+
+    /// The rail's width part-way through opening or closing.
+    fn sidebar_width(&self) -> f32 {
+        use moonlight_design::motion::metrics;
+        let (from, to) = if self.sidebar_collapsed {
+            (metrics::RAIL, metrics::RAIL_COLLAPSED)
+        } else {
+            (metrics::RAIL_COLLAPSED, metrics::RAIL)
+        };
+        let Some(started) = self.sidebar_started else {
+            return to;
+        };
+        let linear = motion::progress(started.elapsed(), dur::SLIDE);
+        from + (to - from) * Curve::SLIDE.at(linear)
+    }
+
+    /// Whether anything is mid-animation, so the subscription knows to keep
+    /// asking for frames.
+    fn is_animating(&self) -> bool {
+        let running = |started: Option<Instant>, duration: Duration| {
+            started.is_some_and(|at| at.elapsed() < duration)
+        };
+        running(self.page_started, dur::ENTER) || running(self.sidebar_started, dur::SLIDE)
+    }
+
     fn transition_progress(&self) -> f32 {
         let Some(started) = self.transition_started else {
             return 1.0;
@@ -405,10 +457,18 @@ impl Moonlight {
 
     fn update(&mut self, message: Message) -> Task<Message> {
         match message {
-            Message::Navigate(page) => self.page = page,
+            Message::Navigate(page) => {
+                // Re-entering the page you are already on should not replay the
+                // entrance: it reads as the app having lost its place.
+                if self.page != page {
+                    self.page = page;
+                    self.page_started = Some(Instant::now());
+                }
+            }
             Message::ToggleSidebar => {
                 self.sidebar_collapsed = !self.sidebar_collapsed;
                 self.preferences.sidebar_collapsed = self.sidebar_collapsed;
+                self.sidebar_started = Some(Instant::now());
                 self.save();
             }
             Message::CycleAppearance => {
@@ -422,8 +482,14 @@ impl Moonlight {
                 self.save();
             }
             Message::SetLocale(locale) => {
-                self.preferences.locale = locale;
-                self.save();
+                if self.preferences.locale != locale {
+                    self.preferences.locale = locale;
+                    // Every string on screen has just been replaced, so the
+                    // screen replays its entrance rather than swapping the words
+                    // underneath the reader.
+                    self.page_started = Some(Instant::now());
+                    self.save();
+                }
             }
             Message::ToggleLaunchAtLogin => {
                 let wanted = !self.preferences.launch_at_login;
@@ -568,10 +634,27 @@ impl Moonlight {
             Message::RunningScanned(running) => self.running = running,
 
             Message::InstallHelper => {
-                return Task::perform(install_helper(true), Message::HelperChanged)
+                return Task::perform(install_helper(true), Message::HelperAttempted)
             }
             Message::RemoveHelper => {
-                return Task::perform(install_helper(false), Message::HelperChanged)
+                return Task::perform(install_helper(false), Message::HelperAttempted)
+            }
+            Message::HelperAttempted(result) => {
+                let installed = match result {
+                    Ok(installed) => {
+                        self.last_error = None;
+                        installed
+                    }
+                    Err(reason) => {
+                        let key = match reason.as_str() {
+                            HELPER_MISSING => S::HelperMissingBinary,
+                            _ => S::HelperInstallFailed,
+                        };
+                        self.last_error = Some(t(key, self.locale()).to_string());
+                        self.helper_installed
+                    }
+                };
+                return self.update(Message::HelperChanged(installed));
             }
             Message::HelperChanged(installed) => {
                 self.helper_installed = installed;
@@ -600,6 +683,9 @@ impl Moonlight {
             // The window is undecorated, so moving, minimising, maximising and
             // closing it are all this app's job.
             Message::DragWindow => return with_window(iced::window::drag),
+            Message::ResizeWindow(direction) => {
+                return with_window(move |id| iced::window::drag_resize(id, direction))
+            }
             Message::MinimiseWindow => return with_window(|id| iced::window::minimize(id, true)),
             Message::MaximiseWindow => return with_window(iced::window::toggle_maximize),
             Message::CloseWindow => {
@@ -695,6 +781,13 @@ impl Moonlight {
     fn subscription(&self) -> Subscription<Message> {
         let mut subscriptions = vec![Subscription::run(controller_events)];
 
+        // An entrance or a rail glide needs frames regardless of what the
+        // tunnel is doing, and both are short.
+        if self.is_animating() {
+            subscriptions.push(iced::time::every(Duration::from_millis(16)).map(Message::Tick));
+            return Subscription::batch(subscriptions);
+        }
+
         // Only while something is moving. A window sitting disconnected has no
         // reason to wake the GPU sixty times a second.
         match Cadence::for_state(&self.state, self.page) {
@@ -730,12 +823,16 @@ impl Moonlight {
             Page::Connections => screens::connections::view(self),
         };
 
+        // The rail's contents swap to icon-only the moment it is collapsed, but
+        // its *width* glides — so the labels do not linger in a box too narrow
+        // to hold them.
         let shell = row![
             screens::sidebar::view(
                 palette,
                 locale,
                 self.page.rail_item(),
                 self.sidebar_collapsed,
+                self.sidebar_width(),
                 &self.preferences,
                 &self.info,
             ),
@@ -743,15 +840,19 @@ impl Moonlight {
             column![
                 screens::header::view(self),
                 screens::header::rule(palette),
-                container(if scrolls {
-                    Element::from(
-                        scrollable(body)
-                            .height(Length::Fill)
-                            .style(move |theme, _| theme::scroller(palette, theme)),
-                    )
-                } else {
-                    body
-                })
+                container(column![
+                    // The entrance: the screen starts 18px low and settles.
+                    vspace(Length::Fixed(self.page_rise())),
+                    if scrolls {
+                        Element::from(
+                            scrollable(body)
+                                .height(Length::Fill)
+                                .style(move |theme, _| theme::scroller(palette, theme)),
+                        )
+                    } else {
+                        body
+                    }
+                ])
                 .height(Length::Fill)
                 // 20 above, 24 the rest of the way round, from the composition.
                 .padding(iced::Padding {
@@ -765,7 +866,7 @@ impl Moonlight {
         ]
         .height(Length::Fill);
 
-        container(
+        let window = container(
             column![
                 screens::titlebar::view(self),
                 screens::titlebar::rule(palette),
@@ -775,8 +876,12 @@ impl Moonlight {
         )
         .width(Length::Fill)
         .height(Length::Fill)
-        .style(move |_| theme::page(palette))
-        .into()
+        .style(move |_| theme::page(palette));
+
+        // The resize edges go on last, over everything: an undecorated window
+        // has no non-client area for Windows to hit-test, so the app owns its
+        // own borders.
+        screens::resize::frame(window.into())
     }
 }
 
@@ -865,38 +970,75 @@ async fn check_helper() -> bool {
 
 /// Installing the service needs elevation, so it is a UAC prompt on the helper's
 /// own `--install`, not something this process can do.
-async fn install_helper(install: bool) -> bool {
+///
+/// Returns the resulting installed state, and a message when the attempt itself
+/// failed. Every one of these paths used to be swallowed: a missing helper, a
+/// dismissed prompt and a service that refused to register all looked exactly
+/// like pressing a button that does nothing.
+async fn install_helper(install: bool) -> Result<bool, String> {
     let flag = if install { "--install" } else { "--uninstall" };
-    let _ = tokio::task::spawn_blocking(move || elevate(flag)).await;
+    let outcome = tokio::task::spawn_blocking(move || elevate(flag))
+        .await
+        .unwrap_or_else(|_| Err(HELPER_FAILED.to_string()));
+    // The service control manager finishes registering a moment after the
+    // elevated process exits, so the state is read after a beat either way.
     tokio::time::sleep(Duration::from_millis(600)).await;
-    check_helper().await
+    let installed = check_helper().await;
+    match outcome {
+        // A refused prompt with the service already in the wanted state is not
+        // worth a message — the user got what they asked for another way.
+        Err(message) if installed != install => Err(message),
+        _ => Ok(installed),
+    }
 }
 
+/// Shown when the elevated step could not even be attempted.
+const HELPER_FAILED: &str = "helper-failed";
+/// Shown when `moonlight-helper.exe` is not beside the app.
+const HELPER_MISSING: &str = "helper-missing";
+
 #[cfg(windows)]
-fn elevate(argument: &str) {
+fn elevate(argument: &str) -> Result<(), String> {
     // The `runas` verb is what raises the UAC prompt; a plain spawn fails with
     // ERROR_ELEVATION_REQUIRED and no dialog, which reads as nothing happening.
-    let Ok(exe) = std::env::current_exe() else {
-        return;
-    };
-    let Some(helper) = exe.parent().map(|d| d.join("moonlight-helper.exe")) else {
-        return;
-    };
-    let _ = std::process::Command::new("powershell")
+    let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+    let helper = exe
+        .parent()
+        .map(|d| d.join("moonlight-helper.exe"))
+        .ok_or_else(|| HELPER_MISSING.to_string())?;
+
+    // The commonest way this fails is the bare `Moonlight.exe` from the release
+    // page, downloaded on its own: TUN needs the service, the service is a
+    // second binary, and without it the button had nothing to elevate.
+    if !helper.is_file() {
+        return Err(HELPER_MISSING.to_string());
+    }
+
+    let status = std::process::Command::new("powershell")
         .args([
             "-NoProfile",
             "-NonInteractive",
             "-Command",
             &format!(
-                "Start-Process -FilePath '{}' -ArgumentList '{argument}' -Verb RunAs -Wait",
+                "$p = Start-Process -FilePath '{}' -ArgumentList '{argument}' \
+                 -Verb RunAs -Wait -PassThru; exit $p.ExitCode",
                 helper.display()
             ),
         ])
-        .output();
+        .status()
+        .map_err(|e| e.to_string())?;
+
+    if status.success() {
+        Ok(())
+    } else {
+        Err(HELPER_FAILED.to_string())
+    }
 }
 
 #[cfg(not(windows))]
-fn elevate(_argument: &str) {}
+fn elevate(_argument: &str) -> Result<(), String> {
+    Err(HELPER_FAILED.to_string())
+}
 
 async fn check_updates(locale: AppLocale) -> String {
     use moonlight_core::updater::{self, Outcome};

@@ -16,7 +16,7 @@
 //! The title carries the connection state next to a status dot, so a user whose
 //! window is behind something else can still read it from the taskbar preview.
 
-use iced::widget::{button, canvas, container, row, text};
+use iced::widget::{button, canvas, container, mouse_area, row, text};
 use iced::{Alignment, Background, Border, Element, Length};
 
 use moonlight_core::ConnectionState;
@@ -72,20 +72,22 @@ pub fn view(app: &Moonlight) -> Element<'_, Message> {
     // The draggable region is everything that is not a control. A bar with no
     // drag region is a window that cannot be moved at all, since there is no
     // native caption behind it.
-    let drag = button(
-        row![mark, title]
-            .spacing(12)
-            .align_y(Alignment::Center)
-            .width(Length::Fill),
+    //
+    // `mouse_area`, not `button`: iced publishes a button's `on_press` on mouse
+    // *release*, so `window::drag` was being asked to start a move loop after
+    // the button was already up. Windows needs the button still held — the call
+    // succeeded and did nothing, which is why the window could not be moved at
+    // all. `mouse_area` fires on the press itself.
+    let drag = mouse_area(
+        container(
+            row![mark, title]
+                .spacing(12)
+                .align_y(Alignment::Center)
+                .width(Length::Fill),
+        )
+        .height(Length::Fill),
     )
-    .on_press(Message::DragWindow)
-    .padding(0)
-    .width(Length::Fill)
-    .style(|_, _| button::Style {
-        background: None,
-        text_color: iced::Color::WHITE,
-        ..Default::default()
-    });
+    .on_press(Message::DragWindow);
 
     let controls = row![
         caption(palette, Icon::Minus, 15.0, Message::MinimiseWindow, false),

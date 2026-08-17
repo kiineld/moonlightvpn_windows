@@ -11,6 +11,7 @@ pub mod connections;
 pub mod header;
 pub mod import;
 pub mod logs;
+pub mod resize;
 pub mod settings;
 pub mod sidebar;
 pub mod subscription;

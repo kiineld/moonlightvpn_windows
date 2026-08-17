@@ -152,6 +152,8 @@ strings! {
     SectionDiagnostics => "ДИАГНОСТИКА"     / "DIAGNOSTICS",
     HelperNote      => "Один запрос прав администратора" / "One administrator prompt",
     HelperMissing   => "Служба не установлена" / "Helper not installed",
+    HelperMissingBinary => "Рядом с приложением нет moonlight-helper.exe. Скачайте Moonlight-x86_64.zip целиком или установите через инсталлятор." / "moonlight-helper.exe is not next to the app. Download the full Moonlight-x86_64.zip, or use the installer.",
+    HelperInstallFailed => "Не удалось установить службу. Подтвердите запрос администратора." / "Could not install the helper. Approve the administrator prompt and try again.",
     ChannelNote     => "Новости и обновления" / "News and updates",
     SupportNote     => "Мы на связи 24/7"    / "We are here 24/7",
     CoreLog         => "Журнал ядра"        / "Core log",

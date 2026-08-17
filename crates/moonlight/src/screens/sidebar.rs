@@ -19,10 +19,6 @@ use crate::localization::{t, S};
 use crate::logo::Logo;
 use crate::{hspace, theme, vspace, Message, Page};
 
-/// The collapsed rail and the full sidebar.
-const RAIL: f32 = metrics::RAIL_COLLAPSED;
-const EXPANDED: f32 = metrics::RAIL;
-
 /// The wordmark: 17px at 700 with display tracking, from the composition — it
 /// labels the app rather than titling a page.
 const WORDMARK: f32 = 17.0;
@@ -41,10 +37,11 @@ pub fn view<'a>(
     locale: AppLocale,
     current: Page,
     collapsed: bool,
+    // The rail's current width, which is mid-glide while it opens or closes.
+    width: f32,
     preferences: &'a Preferences,
     info: &'a SubscriptionInfo,
 ) -> Element<'a, Message> {
-    let width = if collapsed { RAIL } else { EXPANDED };
     let pad_x = if collapsed { 10.0 } else { 14.0 };
 
     let mut items = column![].spacing(6);
@@ -328,9 +325,10 @@ mod tests {
     #[test]
     fn the_rail_widths_match_the_macos_client() {
         // 236 expanded, 72 collapsed. An earlier pass had 248 and 76, which is a
-        // 12pt and a 4pt drift from the client this is meant to mirror.
-        assert_eq!(EXPANDED, 236.0);
-        assert_eq!(RAIL, 72.0);
+        // 12pt and a 4pt drift from the client this is meant to mirror. The
+        // width itself is passed in now, because it glides between the two.
+        assert_eq!(metrics::RAIL, 236.0);
+        assert_eq!(metrics::RAIL_COLLAPSED, 72.0);
     }
 
     #[test]
