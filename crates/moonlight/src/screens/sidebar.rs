@@ -219,18 +219,36 @@ fn nav_item<'a>(
         .into()
     };
 
+    let styled = move |_: &_, status| {
+        if selected {
+            theme::accent_button(palette, status)
+        } else {
+            theme::nav_button(palette, status)
+        }
+    };
+
+    // Collapsed, the item is a fixed square centred in the rail: a pill radius on
+    // a square is a circle, whereas the same radius on the full 52px rail width
+    // stretched it into an ellipse. Expanded, it fills the rail as a row.
+    if collapsed {
+        return container(
+            button(components::centre(inner))
+                .on_press(Message::Navigate(page))
+                .width(Length::Fixed(metrics::NAV_ROW))
+                .height(Length::Fixed(metrics::NAV_ROW))
+                .padding(0)
+                .style(styled),
+        )
+        .center_x(Length::Fill)
+        .into();
+    }
+
     button(components::centre(inner))
         .on_press(Message::Navigate(page))
         .height(Length::Fixed(metrics::NAV_ROW))
-        .padding(if collapsed { [0, 0] } else { [0, 12] })
+        .padding([0, 12])
         .width(Length::Fill)
-        .style(move |_, status| {
-            if selected {
-                theme::accent_button(palette, status)
-            } else {
-                theme::nav_button(palette, status)
-            }
-        })
+        .style(styled)
         .into()
 }
 
