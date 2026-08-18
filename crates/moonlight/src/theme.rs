@@ -326,9 +326,12 @@ pub fn glow(color: Color) -> Shadow {
 /// elevation is a surface's value rather than a blur.
 pub fn glow_sm(color: Color) -> Shadow {
     Shadow {
-        color: alpha(color, 0.5),
+        color: alpha(color, 0.7),
         offset: Vector::ZERO,
-        blur_radius: 34.0,
+        // 8, not 34. The macOS client sets this dot's shadow at radius 5, and
+        // 34 spread the 8px dot into a soft green disc a third the width of the
+        // ring — a blob, not a glow.
+        blur_radius: 8.0,
     }
 }
 

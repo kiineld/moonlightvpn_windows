@@ -83,7 +83,9 @@ fn plan_card(app: &Moonlight) -> Element<'_, Message> {
         .align_y(Alignment::Center),
         text(
             info.title
-                .clone()
+                .as_deref()
+                .map(format::without_emoji)
+                .filter(|s| !s.is_empty())
                 .unwrap_or_else(|| t(S::NavSubscription, locale).to_string())
         )
         .font(moonlight_design::display())

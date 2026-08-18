@@ -248,6 +248,8 @@ pub enum Message {
     CloseAllConnections,
     /// Unfold or fold one process's connections.
     ToggleConnectionProcess(String),
+    /// A row that exists only to highlight on hover, with no action of its own.
+    Ignore,
     ConnectionFilterChanged(String),
 
     DragWindow,
@@ -802,6 +804,7 @@ impl Moonlight {
             Message::LogFilterSource(source) => self.log_source = source,
             Message::LogFilterText(value) => self.log_filter = value,
             Message::ClearLogs => self.logs.clear(),
+            Message::Ignore => {}
             Message::ToggleConnectionProcess(process) => {
                 if !self.expanded_processes.remove(&process) {
                     self.expanded_processes.insert(process);
@@ -1046,6 +1049,25 @@ impl Moonlight {
             .width(Length::Fill),
         ]
         .height(Length::Fill);
+
+        // The rail's toggle floats over the seam, vertically centred, rather
+        // than living in a column of its own: the tab straddles the boundary,
+        // half on the rail and half over the page, and only the tab itself
+        // catches clicks — the rest of the overlay lets them fall through.
+        let toggle = container(
+            row![
+                // The circle is centred on the rail's right edge, so its left
+                // half is hidden behind the rail and its right half bulges out.
+                hspace(Length::Fixed(
+                    self.sidebar_width() - screens::sidebar::TAB_OVERLAP,
+                )),
+                screens::sidebar::edge_toggle(palette, self.sidebar_collapsed),
+            ]
+            .align_y(iced::Alignment::Center),
+        )
+        .center_y(Length::Fill);
+
+        let shell = iced::widget::stack![shell, toggle].height(Length::Fill);
 
         let window = container(
             column![
@@ -1376,8 +1398,11 @@ async fn check_updates(locale: AppLocale) -> (String, bool) {
 fn open_url(url: &str) {
     #[cfg(windows)]
     {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
         let _ = std::process::Command::new("cmd")
             .args(["/c", "start", "", url])
+            .creation_flags(CREATE_NO_WINDOW)
             .spawn();
     }
     #[cfg(target_os = "macos")]
@@ -1429,6 +1454,11 @@ fn system_prefers_dark() -> bool {
     {
         static CACHE: OnceLock<bool> = OnceLock::new();
         *CACHE.get_or_init(|| {
+            // `reg.exe` is a console program, and spawning it flashed a black
+            // window on every launch — this runs once, at the first draw, to
+            // read the system theme. CREATE_NO_WINDOW keeps it invisible.
+            use std::os::windows::process::CommandExt;
+            const CREATE_NO_WINDOW: u32 = 0x0800_0000;
             let output = std::process::Command::new("reg")
                 .args([
                     "query",
@@ -1436,6 +1466,7 @@ fn system_prefers_dark() -> bool {
                     "/v",
                     "AppsUseLightTheme",
                 ])
+                .creation_flags(CREATE_NO_WINDOW)
                 .output();
             match output {
                 Ok(output) => !String::from_utf8_lossy(&output.stdout).contains("0x1"),

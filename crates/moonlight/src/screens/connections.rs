@@ -176,7 +176,7 @@ fn host_row<'a>(app: &'a Moonlight, connection: &'a Connection) -> Element<'a, M
     ]
     .align_y(Alignment::Center);
 
-    row![
+    let content = row![
         container(name).width(Length::Fill),
         chain_cell(app, Some(connection)),
         rule_cell(palette, Some(connection), locale),
@@ -187,9 +187,18 @@ fn host_row<'a>(app: &'a Moonlight, connection: &'a Connection) -> Element<'a, M
         close_button(palette, CloseTarget::One(connection.id.clone())),
     ]
     .spacing(10)
-    .padding([7, 14])
-    .align_y(Alignment::Center)
-    .into()
+    .align_y(Alignment::Center);
+
+    // A button, not a bare row: it highlights under the pointer like every other
+    // list in the app, which is what turns a wall of host text into a table you
+    // can point at. The row itself has no action — the nested X, which captures
+    // the click before the row sees it, is what closes the connection.
+    button(content)
+        .on_press(Message::Ignore)
+        .padding([7, 14])
+        .width(Length::Fill)
+        .style(move |_, status| theme::row_button(palette, false, status))
+        .into()
 }
 
 // MARK: - Cells

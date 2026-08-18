@@ -27,10 +27,18 @@ const WORDMARK: f32 = 17.0;
 const MARK: f32 = 32.0;
 const MARK_RADIUS: f32 = 10.0;
 
-/// The collapse control — a 30pt square on the panel surface, which is what
-/// gives it an affordance. The wordmark used to be the toggle, which worked but
-/// advertised nothing.
-const COLLAPSE: f32 = 30.0;
+/// The edge tab.
+///
+/// Drawn as a **full** circle and positioned so exactly half of it is hidden
+/// behind the rail — the visible half is the bulge over the page. This is the
+/// only way to get a true half-disc in iced: a box's corner radius is clamped to
+/// half its *width*, so a 22-wide box asked for a semicircle renders a
+/// rounded rectangle instead. A circle has width == height, so it is never
+/// clamped.
+const TAB_DIAMETER: f32 = 40.0;
+/// How far the circle is tucked behind the rail — exactly half, so what shows is
+/// a semicircle sitting on the seam.
+pub const TAB_OVERLAP: f32 = TAB_DIAMETER / 2.0;
 
 /// Where the rail swaps between its two layouts, mid-glide.
 ///
@@ -96,27 +104,24 @@ pub fn rule<'a>(palette: Palette) -> Element<'a, Message> {
         .into()
 }
 
-/// The logo, the wordmark and the collapse control.
+/// The logo and, when there is room, the wordmark.
 ///
-/// Collapsed there is no room beside the logo, so the control takes its own line
-/// underneath rather than being dropped — a rail with no way back out of it is a
-/// state the user cannot leave.
+/// The collapse control is no longer here — it sits as a tab on the rail's own
+/// edge (see [`edge_toggle`]), which is where the eye goes to look for the seam
+/// between rail and page.
 fn header<'a>(palette: Palette, collapsed: bool) -> Element<'a, Message> {
     let mark = canvas(Logo::with_radius(palette, MARK_RADIUS))
         .width(Length::Fixed(MARK))
         .height(Length::Fixed(MARK));
 
     if collapsed {
-        return column![
-            container(mark).center_x(Length::Fill),
-            container(collapse_button(palette, collapsed)).center_x(Length::Fill),
-        ]
-        .spacing(8)
-        .padding(iced::Padding {
-            bottom: 8.0,
-            ..iced::Padding::ZERO
-        })
-        .into();
+        return container(mark)
+            .center_x(Length::Fill)
+            .padding(iced::Padding {
+                bottom: 8.0,
+                ..iced::Padding::ZERO
+            })
+            .into();
     }
 
     container(
@@ -126,8 +131,6 @@ fn header<'a>(palette: Palette, collapsed: bool) -> Element<'a, Message> {
                 .font(moonlight_design::display())
                 .size(WORDMARK)
                 .color(palette.text),
-            hspace(Length::Fill),
-            collapse_button(palette, collapsed),
         ]
         .spacing(10)
         .align_y(Alignment::Center),
@@ -141,31 +144,61 @@ fn header<'a>(palette: Palette, collapsed: bool) -> Element<'a, Message> {
     .into()
 }
 
-fn collapse_button<'a>(palette: Palette, collapsed: bool) -> Element<'a, Message> {
+/// The half-circle tab that opens and closes the rail.
+///
+/// It straddles the seam between rail and page: a D — flat against the rail,
+/// bulging out over the page — with a chevron pointing the way it will move the
+/// edge. Left to close, right to open. The macOS client puts the control on the
+/// edge for the same reason, because that is the line the change happens on.
+///
+/// Returned on its own so the shell can float it, vertically centred, over the
+/// seam rather than reserving a column for it.
+pub fn edge_toggle<'a>(palette: Palette, collapsed: bool) -> Element<'a, Message> {
     let glyph = if collapsed {
-        Icon::PanelLeftOpen
+        Icon::ChevronRight
     } else {
-        Icon::PanelLeftClose
+        Icon::ChevronLeft
     };
 
-    button(container(icon(glyph, 17.0, palette.text_muted)).center(Length::Fill))
-        .on_press(Message::ToggleSidebar)
-        .width(Length::Fixed(COLLAPSE))
-        .height(Length::Fixed(COLLAPSE))
-        .padding(0)
-        .style(move |_, status| button::Style {
-            background: Some(Background::Color(match status {
-                button::Status::Hovered | button::Status::Pressed => palette.surface2,
-                _ => palette.surface,
-            })),
-            text_color: palette.text_muted,
+    button(
+        // The glyph sits in the visible right half of the circle, clear of the
+        // seam it straddles.
+        container(moonlight_design::icon_thin(glyph, 15.0, palette.text2, 2.4))
+            // Left padding fences off the hidden half; centring then places the
+            // glyph in the middle of the visible half, not the whole circle.
+            .padding(iced::Padding {
+                left: TAB_OVERLAP,
+                ..iced::Padding::ZERO
+            })
+            .center_x(Length::Fill)
+            .center_y(Length::Fixed(TAB_DIAMETER)),
+    )
+    .on_press(Message::ToggleSidebar)
+    .width(Length::Fixed(TAB_DIAMETER))
+    .height(Length::Fixed(TAB_DIAMETER))
+    .padding(0)
+    .style(move |_, status| {
+        // The rail's own colour, so the visible half reads as the rail bulging
+        // out over the page. No border: a full-circle outline would draw an arc
+        // across the rail where the hidden half sits. The bulge shows because
+        // `bg_deep` is darker than the `bg` page behind it; hover lifts it to
+        // `surface2`.
+        let fill = match status {
+            button::Status::Hovered | button::Status::Pressed => palette.surface2,
+            _ => palette.bg_deep,
+        };
+        button::Style {
+            background: Some(Background::Color(fill)),
+            text_color: palette.text2,
             border: Border {
-                radius: iced::border::Radius::from(9.0),
-                ..Default::default()
+                radius: iced::border::Radius::from(TAB_DIAMETER / 2.0),
+                width: 0.0,
+                color: iced::Color::TRANSPARENT,
             },
             ..Default::default()
-        })
-        .into()
+        }
+    })
+    .into()
 }
 
 fn nav_item<'a>(
