@@ -608,7 +608,7 @@ impl Controller {
                 continue;
             };
             let kind = map.get("type").and_then(|v| v.as_str()).unwrap_or("");
-            let mut label = kind.to_uppercase();
+            let mut label = protocol_name(kind);
             if map.contains_key("reality-opts") {
                 label.push_str(" Reality");
             } else if map.get("tls").and_then(|v| v.as_bool()) == Some(true) {
@@ -989,6 +989,34 @@ fn cache_nodes(nodes: &[Node]) {
 fn cached_nodes() -> Option<Vec<Node>> {
     let text = std::fs::read_to_string(nodes_cache_path()).ok()?;
     serde_json::from_str(&text).ok()
+}
+
+/// A protocol's name as it is written, rather than shouted.
+///
+/// The config spells these in lower case, and upper-casing the lot gave
+/// "HYSTERIA2" and "VMESS" where the products are called Hysteria2 and VMess.
+/// Acronyms stay capitals; names do not.
+pub fn protocol_name(kind: &str) -> String {
+    match kind.to_lowercase().as_str() {
+        "vless" => "VLESS",
+        "vmess" => "VMess",
+        "trojan" => "Trojan",
+        "hysteria" => "Hysteria",
+        "hysteria2" | "hy2" => "Hysteria2",
+        "shadowsocks" | "ss" => "Shadowsocks",
+        "shadowsocksr" | "ssr" => "ShadowsocksR",
+        "tuic" => "TUIC",
+        "wireguard" | "wg" => "WireGuard",
+        "snell" => "Snell",
+        "socks5" | "socks" => "SOCKS5",
+        "http" => "HTTP",
+        "anytls" => "AnyTLS",
+        "ssh" => "SSH",
+        "mieru" => "Mieru",
+        // Something new: shout it rather than guess at its capitalisation.
+        other => return other.to_uppercase(),
+    }
+    .to_string()
 }
 
 /// mihomo prefixes its lines with a level; anything else reads as INFO.

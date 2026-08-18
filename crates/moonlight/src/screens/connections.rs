@@ -1,11 +1,9 @@
 //! What is going through the tunnel, as a table.
 //!
-//! Two levels, because the question arrives in two shapes. "Is anything of mine
-//! going out unproxied" is asked of the whole machine, and is answered by one
-//! row per program with its totals. "What is Chrome actually talking to" is
-//! asked of one program, and is answered by its hosts. The old screen tried to
-//! answer both at once by nesting every host under its process, which on a real
-//! machine is eighty rows of indented text and answers neither.
+//! One row per program, unfolding in place to the hosts behind it. Expanding
+//! rather than pushing a second screen is what lets two programs be compared —
+//! and the question here is usually comparative: *this* one is going through the
+//! tunnel, is that one?
 //!
 //! Grouping by process is why `find-process-mode` is always on in the generated
 //! config — without it every row reads "—".
@@ -23,45 +21,52 @@ use crate::components;
 use crate::localization::{t, S};
 use crate::{hspace, theme, vspace, Message, Moonlight};
 
-/// The column widths. Fixed so every row lines up under its heading — the whole
-/// point of a table — with the first column taking whatever is left.
-const CHAIN: f32 = 190.0;
-const RULE: f32 = 130.0;
-const NET: f32 = 78.0;
-const BYTES: f32 = 82.0;
-const TIME: f32 = 56.0;
-/// The leading count badge on a process row.
-const BADGE: f32 = 34.0;
+/// The column widths. Fixed so every row lines up under its heading, which is
+/// the whole point of a table; the process column takes whatever is left.
+const CHAIN: f32 = 150.0;
+const RULE: f32 = 92.0;
+const NET: f32 = 74.0;
+const BYTES: f32 = 78.0;
+const TIME: f32 = 52.0;
+/// The trailing close control, and the leading count.
+const CLOSE: f32 = 24.0;
+const COUNT: f32 = 20.0;
 
 pub fn view(app: &Moonlight) -> Element<'_, Message> {
-    match app.connection_process() {
-        Some(process) => hosts(app, process),
-        None => processes(app),
-    }
-}
-
-// MARK: - Level one: one row per process
-
-fn processes(app: &Moonlight) -> Element<'_, Message> {
     let palette = app.palette_of();
     let locale = app.locale_of();
     let needle = app.connection_filter().to_lowercase();
 
+    // A filter matches on either level: typing "telegram" keeps that program,
+    // and typing "443" keeps the hosts inside every program that has one.
     let grouped: Vec<(String, Vec<&Connection>)> = app
         .connections_by_process()
         .into_iter()
-        .filter(|(process, _)| needle.is_empty() || process.to_lowercase().contains(&needle))
+        .filter_map(|(process, connections)| {
+            if needle.is_empty() || process.to_lowercase().contains(&needle) {
+                return Some((process, connections));
+            }
+            let matching: Vec<&Connection> = connections
+                .into_iter()
+                .filter(|c| c.host.to_lowercase().contains(&needle))
+                .collect();
+            (!matching.is_empty()).then_some((process, matching))
+        })
         .collect();
 
     let empty_list = grouped.is_empty();
     let mut rows = column![].spacing(0);
-    // Consumed rather than borrowed: the rows outlive this Vec, and only the
-    // `&Connection`s inside it — which point into the app — may travel with them.
     for (index, (process, connections)) in grouped.into_iter().enumerate() {
         if index > 0 {
             rows = rows.push(components::soft_divider(palette));
         }
-        rows = rows.push(process_row(app, process, connections));
+        let expanded = app.is_process_expanded(&process);
+        rows = rows.push(process_row(app, process, &connections, expanded));
+        if expanded {
+            for connection in connections {
+                rows = rows.push(host_row(app, connection));
+            }
+        }
     }
 
     let body: Element<'_, Message> = if empty_list {
@@ -78,19 +83,21 @@ fn processes(app: &Moonlight) -> Element<'_, Message> {
     };
 
     column![
-        controls(app, None),
+        controls(app),
         vspace(Length::Fixed(14.0)),
-        heading(palette, t(S::ColProcess, locale)),
+        heading(palette, locale),
         components::surface(body, palette),
     ]
     .height(Length::Fill)
     .into()
 }
 
+/// One program: how many connections it holds, its own icon, and its totals.
 fn process_row<'a>(
     app: &'a Moonlight,
     process: String,
-    connections: Vec<&'a Connection>,
+    connections: &[&'a Connection],
+    expanded: bool,
 ) -> Element<'a, Message> {
     let palette = app.palette_of();
     let locale = app.locale_of();
@@ -101,26 +108,23 @@ fn process_row<'a>(
     let age = connections.iter().map(|c| elapsed(c)).max().unwrap_or(0);
 
     // The chain and rule of the busiest connection stand for the group: a
-    // program's connections almost always share both, and where they do not the
-    // drill-down is one press away.
+    // program's connections almost always share both, and where they do not,
+    // unfolding shows the difference.
     let representative = connections.first().copied();
 
     let count = container(
         text(format!("{}", connections.len()))
-            .size(scale::MICRO)
+            .size(10.5)
             .font(moonlight_design::ui(EMPHATIC))
-            .color(palette.accent_ink),
+            .color(palette.text_muted),
     )
-    .center_x(Length::Fixed(BADGE))
-    .center_y(Length::Fixed(22.0))
-    .style(move |_| container::Style {
-        background: Some(iced::Background::Color(palette.accent_quiet)),
-        border: iced::Border {
-            radius: iced::border::Radius::from(radii::CHIP),
-            ..Default::default()
-        },
-        ..Default::default()
-    });
+    .width(Length::Fixed(COUNT));
+
+    let chevron = if expanded {
+        Icon::ChevronDown
+    } else {
+        Icon::ChevronRight
+    };
 
     let name = row![
         count,
@@ -129,109 +133,92 @@ fn process_row<'a>(
             .size(scale::BODY_SM)
             .font(moonlight_design::ui(ROW_TITLE))
             .color(palette.text),
+        moonlight_design::icon_thin(chevron, 14.0, palette.text_muted, 2.2),
     ]
-    .spacing(10)
+    .spacing(9)
     .align_y(Alignment::Center);
 
     let content = row![
         container(name).width(Length::Fill),
         chain_cell(app, representative),
         rule_cell(palette, representative, locale),
-        network_cell(palette, &connections),
-        bytes_cell(palette, download, locale),
-        bytes_cell(palette, upload, locale),
+        network_cell(palette, connections),
+        bytes_cell(palette, download, locale, true),
+        bytes_cell(palette, upload, locale, false),
         time_cell(palette, age),
+        // Closing a program's connections at once, without unfolding it.
+        close_button(palette, CloseTarget::Process(process.clone())),
     ]
     .spacing(10)
     .align_y(Alignment::Center);
 
     button(content)
-        .on_press(Message::SelectConnectionProcess(Some(process)))
-        .padding([11, 14])
+        .on_press(Message::ToggleConnectionProcess(process))
+        .padding([9, 14])
         .width(Length::Fill)
         .style(move |_, status| theme::row_button(palette, false, status))
         .into()
 }
 
-// MARK: - Level two: one row per host, for a single process
-
-fn hosts<'a>(app: &'a Moonlight, process: &'a str) -> Element<'a, Message> {
-    let palette = app.palette_of();
-    let locale = app.locale_of();
-    let needle = app.connection_filter().to_lowercase();
-
-    let matching: Vec<&Connection> = app
-        .connections()
-        .iter()
-        .filter(|c| c.process == process)
-        .filter(|c| needle.is_empty() || c.host.to_lowercase().contains(&needle))
-        .collect();
-
-    let mut rows = column![].spacing(0);
-    for (index, connection) in matching.iter().enumerate() {
-        if index > 0 {
-            rows = rows.push(components::soft_divider(palette));
-        }
-        rows = rows.push(host_row(app, connection));
-    }
-
-    let body: Element<'_, Message> = if matching.is_empty() {
-        empty(app)
-    } else {
-        scrollable(rows.padding(iced::Padding {
-            right: crate::SCROLLBAR_GUTTER,
-            ..iced::Padding::ZERO
-        }))
-        .direction(scrollbar())
-        .height(Length::Fill)
-        .style(move |theme, _| theme::scroller(palette, theme))
-        .into()
-    };
-
-    column![
-        controls(app, Some(process)),
-        vspace(Length::Fixed(14.0)),
-        heading(palette, t(S::ColHost, locale)),
-        components::surface(body, palette),
-    ]
-    .height(Length::Fill)
-    .into()
-}
-
+/// One host under an unfolded program. Indented, and dimmer, because it is a
+/// detail of the row above rather than a peer of it.
 fn host_row<'a>(app: &'a Moonlight, connection: &'a Connection) -> Element<'a, Message> {
     let palette = app.palette_of();
     let locale = app.locale_of();
     let one = [connection];
 
-    let content = row![
-        container(
-            text(connection.host.clone())
-                .font(moonlight_design::mono())
-                .size(scale::META)
-                .color(palette.text)
-        )
-        .width(Length::Fill),
+    let name = row![
+        hspace(Length::Fixed(COUNT + 9.0)),
+        text(connection.host.clone())
+            .font(moonlight_design::mono())
+            .size(scale::META)
+            .color(palette.text2),
+    ]
+    .align_y(Alignment::Center);
+
+    row![
+        container(name).width(Length::Fill),
         chain_cell(app, Some(connection)),
         rule_cell(palette, Some(connection), locale),
         network_cell(palette, &one),
-        bytes_cell(palette, connection.download, locale),
-        bytes_cell(palette, connection.upload, locale),
+        bytes_cell(palette, connection.download, locale, true),
+        bytes_cell(palette, connection.upload, locale, false),
         time_cell(palette, elapsed(connection)),
+        close_button(palette, CloseTarget::One(connection.id.clone())),
     ]
     .spacing(10)
-    .align_y(Alignment::Center);
-
-    // Closing one reads as "move this onto the node I just picked", because the
-    // core reopens whatever is still wanted.
-    button(content)
-        .on_press(Message::CloseConnection(connection.id.clone()))
-        .padding([11, 14])
-        .width(Length::Fill)
-        .style(move |_, status| theme::row_button(palette, false, status))
-        .into()
+    .padding([7, 14])
+    .align_y(Alignment::Center)
+    .into()
 }
 
-// MARK: - The shared furniture
+// MARK: - Cells
+
+/// What a close control shuts: one connection, or everything a program holds.
+enum CloseTarget {
+    One(String),
+    Process(String),
+}
+
+/// Closing one reads as "move this onto the node I just picked", because the
+/// core reopens whatever is still wanted.
+fn close_button<'a>(palette: Palette, target: CloseTarget) -> Element<'a, Message> {
+    let message = match target {
+        CloseTarget::One(id) => Message::CloseConnection(id),
+        CloseTarget::Process(process) => Message::CloseProcessConnections(process),
+    };
+    button(moonlight_design::icon_thin(
+        Icon::X,
+        13.0,
+        palette.text_muted,
+        2.2,
+    ))
+    .on_press(message)
+    .padding(4)
+    .width(Length::Fixed(CLOSE))
+    .style(move |_, status| theme::nav_button(palette, status))
+    .into()
+}
 
 fn scrollbar() -> scrollable::Direction {
     scrollable::Direction::Vertical(
@@ -242,68 +229,45 @@ fn scrollbar() -> scrollable::Direction {
     )
 }
 
-/// The controls strip: a count, a filter, and a way out.
-fn controls<'a>(app: &'a Moonlight, process: Option<&'a str>) -> Element<'a, Message> {
+/// The controls strip: how many are open, a search, and a way to end them all.
+fn controls(app: &Moonlight) -> Element<'_, Message> {
     let palette = app.palette_of();
     let locale = app.locale_of();
+    let open = app.connections().len();
 
-    let shown = match process {
-        Some(process) => app
-            .connections()
-            .iter()
-            .filter(|c| c.process == process)
-            .count(),
-        None => app.connections().len(),
-    };
-
-    let mut strip = row![].spacing(10).align_y(Alignment::Center);
-
-    // Drilled in, the strip leads with the way back and says whose list this is.
-    if let Some(process) = process {
-        strip = strip.push(
-            button(components::centre(icon(
-                Icon::ChevronLeft,
-                16.0,
-                palette.text2,
-            )))
-            .on_press(Message::SelectConnectionProcess(None))
-            .width(Length::Fixed(30.0))
-            .height(Length::Fixed(30.0))
-            .padding(0)
-            .style(move |_, status| theme::icon_button(palette, status)),
-        );
-        strip = strip.push(app_glyph(app, process));
-        strip = strip.push(
-            text(process.to_string())
-                .size(scale::BODY_SM)
-                .font(moonlight_design::ui(ROW_TITLE))
-                .color(palette.text),
-        );
-    }
-
-    strip = strip.push(components::count_pill(
-        format!("{}: {shown}", t(S::ActiveConnections, locale)),
-        palette,
-    ));
-
-    strip = strip.push(
-        text_input(t(S::FilterText, locale), app.connection_filter())
+    let search = row![
+        icon(Icon::Search, 14.0, palette.text_muted),
+        text_input(t(S::SearchApps, locale), app.connection_filter())
             .on_input(Message::ConnectionFilterChanged)
-            .padding([7, 12])
+            .padding(0)
             .size(scale::META)
-            .width(Length::Fixed(220.0))
-            .style(move |_, status| theme::field(palette, status)),
-    );
+            .width(Length::Fixed(200.0))
+            .style(move |_, status| {
+                // The magnifier is the affordance; the field itself is bare, as
+                // the composition draws it.
+                let mut style = theme::field(palette, status);
+                style.background = iced::Background::Color(iced::Color::TRANSPARENT);
+                style.border.width = 0.0;
+                style
+            }),
+    ]
+    .spacing(8)
+    .align_y(Alignment::Center);
 
-    strip = strip.push(hspace(Length::Fill));
-
-    let live = shown > 0;
+    let live = open > 0;
     let close_ink = if live {
         palette.danger
     } else {
         theme::alpha(palette.danger, 0.5)
     };
-    strip = strip.push(
+
+    row![
+        components::count_pill(
+            format!("{}: {open}", t(S::ActiveConnections, locale)),
+            palette,
+        ),
+        search,
+        hspace(Length::Fill),
         button(components::centre(
             row![
                 moonlight_design::icon_thin(Icon::X, 13.0, close_ink, 2.4),
@@ -331,28 +295,34 @@ fn controls<'a>(app: &'a Moonlight, process: Option<&'a str>) -> Element<'a, Mes
             },
             ..Default::default()
         }),
-    );
-
-    strip.into()
+    ]
+    .spacing(10)
+    .align_y(Alignment::Center)
+    .into()
 }
 
 /// The column headings, in the overline the rest of the app uses for a label.
-fn heading(palette: Palette, first: &str) -> Element<'_, Message> {
-    let cell = move |label: &'static str, width: f32| -> Element<'_, Message> {
-        container(components::overline(label, palette))
-            .width(Length::Fixed(width))
-            .into()
+fn heading(palette: Palette, locale: AppLocale) -> Element<'static, Message> {
+    let cell = move |label: &'static str, width: f32, right: bool| -> Element<'static, Message> {
+        let mut cell = container(components::overline(label, palette)).width(Length::Fixed(width));
+        if right {
+            cell = cell.align_x(Alignment::End);
+        }
+        cell.into()
     };
 
     container(
         row![
-            container(components::overline(first, palette)).width(Length::Fill),
-            cell("ЦЕПОЧКА", CHAIN),
-            cell("ПРАВИЛО", RULE),
-            cell("СЕТЬ", NET),
-            cell("↓ DL", BYTES),
-            cell("↑ UL", BYTES),
-            cell("ВРЕМЯ", TIME),
+            container(components::overline(t(S::ColProcess, locale), palette)).width(Length::Fill),
+            cell("ЦЕПОЧКА", CHAIN, false),
+            cell("ПРАВИЛО", RULE, false),
+            cell("СЕТЬ", NET, false),
+            // Numbers are read by their last digit, so they align right — and so
+            // do their headings.
+            cell(t(S::Downloaded, locale), BYTES, true),
+            cell(t(S::Uploaded, locale), BYTES, true),
+            cell("ВРЕМЯ", TIME, true),
+            hspace(Length::Fixed(CLOSE)),
         ]
         .spacing(10)
         .align_y(Alignment::Center),
@@ -373,7 +343,12 @@ fn app_glyph<'a>(app: &'a Moonlight, process: &str) -> Element<'a, Message> {
     }
 }
 
-/// The node that carried it, with the flag of where it left through.
+/// Where it actually left the machine: the flag, the country, and a mark saying
+/// it went through the tunnel at all.
+///
+/// In the accent, because this is the column the whole screen is read for — a
+/// row that says DIRECT is the one worth spotting, and it says so by *not* being
+/// coloured.
 fn chain_cell<'a>(app: &'a Moonlight, connection: Option<&'a Connection>) -> Element<'a, Message> {
     let palette = app.palette_of();
     let Some(connection) = connection else {
@@ -381,8 +356,21 @@ fn chain_cell<'a>(app: &'a Moonlight, connection: Option<&'a Connection>) -> Ele
     };
 
     let node = connection.node();
-    let mut cell = row![].spacing(6).align_y(Alignment::Center);
+    if node.is_empty() || node.eq_ignore_ascii_case("direct") {
+        // Shown verbatim rather than translated: DIRECT is the chain the core
+        // reported, not a word this app chose, and it appears in mihomo's own
+        // logs and rules under that name.
+        return container(
+            text("DIRECT")
+                .size(scale::META)
+                .font(moonlight_design::ui(EMPHATIC))
+                .color(palette.text_muted),
+        )
+        .width(Length::Fixed(CHAIN))
+        .into();
+    }
 
+    let mut cell = row![].spacing(5).align_y(Alignment::Center);
     if let Some(handle) = app.node_region(node).and_then(|code| app.flag_image(&code)) {
         cell = cell.push(
             iced::widget::image(handle)
@@ -391,14 +379,17 @@ fn chain_cell<'a>(app: &'a Moonlight, connection: Option<&'a Connection>) -> Ele
         );
     }
     cell = cell.push(
-        text(if node.is_empty() {
-            "—".to_string()
-        } else {
-            node.to_string()
-        })
-        .size(scale::META)
-        .color(palette.text2),
+        text(app.node_country(node).unwrap_or_else(|| node.to_string()))
+            .size(scale::META)
+            .font(moonlight_design::ui(EMPHATIC))
+            .color(palette.accent_ink),
     );
+    cell = cell.push(moonlight_design::icon_thin(
+        Icon::Zap,
+        11.0,
+        palette.accent_ink,
+        2.4,
+    ));
 
     container(cell).width(Length::Fixed(CHAIN)).into()
 }
@@ -413,9 +404,15 @@ fn rule_cell<'a>(
         Some(_) => t(S::Unknown, locale).to_string(),
         None => "—".to_string(),
     };
-    container(text(label).size(scale::META).color(palette.text_muted))
-        .width(Length::Fixed(RULE))
-        .into()
+    container(
+        text(label)
+            .size(scale::META)
+            .color(palette.text_muted)
+            .wrapping(text::Wrapping::None),
+    )
+    .width(Length::Fixed(RULE))
+    .clip(true)
+    .into()
 }
 
 /// TCP and UDP as separate chips, because a program doing both is worth seeing
@@ -433,11 +430,11 @@ fn network_cell<'a>(palette: Palette, connections: &[&Connection]) -> Element<'a
     let chip = move |label: &'static str, ink: iced::Color| -> Element<'a, Message> {
         container(
             text(label)
-                .size(10.5)
+                .size(9.5)
                 .font(moonlight_design::ui(EMPHATIC))
                 .color(ink),
         )
-        .padding([2, 6])
+        .padding([2, 5])
         .style(move |_| container::Style {
             background: Some(iced::Background::Color(theme::alpha(ink, 0.14))),
             border: iced::Border {
@@ -454,20 +451,32 @@ fn network_cell<'a>(palette: Palette, connections: &[&Connection]) -> Element<'a
         chips = chips.push(chip("TCP", palette.st_up_ink));
     }
     if udp {
-        chips = chips.push(chip("UDP", palette.st_partial_ink));
+        chips = chips.push(chip("UDP", palette.st_degraded_ink));
     }
 
     container(chips).width(Length::Fixed(NET)).into()
 }
 
-fn bytes_cell<'a>(palette: Palette, value: i64, locale: AppLocale) -> Element<'a, Message> {
+fn bytes_cell<'a>(
+    palette: Palette,
+    value: i64,
+    locale: AppLocale,
+    emphatic: bool,
+) -> Element<'a, Message> {
+    // Downloaded is the figure people scan for, so it carries the weight.
+    let ink = if emphatic {
+        palette.text
+    } else {
+        palette.text2
+    };
     container(
         text(format::bytes(Some(value), locale))
             .font(moonlight_design::mono())
             .size(scale::META)
-            .color(palette.text2),
+            .color(ink),
     )
     .width(Length::Fixed(BYTES))
+    .align_x(Alignment::End)
     .into()
 }
 
@@ -479,6 +488,7 @@ fn time_cell<'a>(palette: Palette, seconds: i64) -> Element<'a, Message> {
             .color(palette.text_muted),
     )
     .width(Length::Fixed(TIME))
+    .align_x(Alignment::End)
     .into()
 }
 
@@ -519,7 +529,7 @@ mod tests {
 
     #[test]
     fn the_age_column_stays_short_enough_to_fit() {
-        // Whatever the value, it has to sit in a 56pt column beside a heading.
+        // Whatever the value, it has to sit in a 52pt column beside a heading.
         for seconds in [0, 59, 60, 3599, 3600, 86_399, 86_400, 9_000_000] {
             assert!(
                 short_age(seconds).chars().count() <= 6,

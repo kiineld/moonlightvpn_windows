@@ -38,7 +38,7 @@ strings! {
     NavApps         => "Приложения"         / "Apps",
     NavSettings     => "Настройки"          / "Settings",
     NavLogs         => "Логи"               / "Logs",
-    NavConnections  => "Соединения"         / "Connections",
+    NavConnections  => "Подключения"        / "Connections",
 
     // Connect screen
     ConnectSubtitle => "Выберите узел и включите туннель" / "Pick a node and switch the tunnel on",
@@ -100,6 +100,8 @@ strings! {
     ImportHelp      => "Вставьте ссылку подписки из Telegram-бота или личного кабинета. Ключи останутся на этом компьютере." / "Paste the subscription link from your Telegram bot or account page. Keys stay on this computer.",
     BotSendsLink    => "Ссылка придёт в чат и добавится сама" / "The link arrives in the chat and adds itself",
     BackToSubscription => "Назад к подписке" / "Back to subscription",
+    SubscriptionActivated => "Подписка активирована!" / "Subscription activated!",
+    ConnectNow      => "Подключиться"       / "Connect",
     OpenTelegramBot => "Открыть Telegram-бот" / "Open the Telegram bot",
 
     // Apps / split tunnelling
@@ -169,7 +171,7 @@ strings! {
 
     // Logs / connections
     LogsSubtitle    => "Логи ядра и приложения на одной шкале" / "The core's log and the app's, on one timeline",
-    ConnectionsSubtitle => "Какие программы идут через туннель" / "Which programs are going through the tunnel",
+    ConnectionsSubtitle => "Какие программы и куда идут прямо сейчас" / "Which programs are talking, and where to, right now",
     FilterAll       => "Все"                / "All",
     CloseConnection => "Закрыть"            / "Close",
     NoConnections   => "Нет активных соединений" / "No open connections",

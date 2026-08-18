@@ -243,9 +243,11 @@ pub enum Message {
     LogFilterText(String),
     ClearLogs,
     CloseConnection(String),
+    /// Close everything one program holds open, without unfolding it first.
+    CloseProcessConnections(String),
     CloseAllConnections,
-    /// Drill into one process's connections, or back out with `None`.
-    SelectConnectionProcess(Option<String>),
+    /// Unfold or fold one process's connections.
+    ToggleConnectionProcess(String),
     ConnectionFilterChanged(String),
 
     DragWindow,
@@ -291,6 +293,12 @@ pub struct Moonlight {
     rule_error: Option<String>,
 
     import_field: String,
+    /// A subscription is being fetched from the Import screen, and the screen is
+    /// waiting to be told it worked.
+    importing: bool,
+    /// It worked, and the Import screen is showing the confirmation rather than
+    /// the form.
+    import_done: bool,
     helper_installed: bool,
     update_status: Option<String>,
     /// Set while the installer is downloading; `None` inside means the total
@@ -306,9 +314,10 @@ pub struct Moonlight {
     log_source: screens::logs::LogFilter,
     log_filter: String,
     connections: Vec<Connection>,
-    /// The process whose own connections are being shown, if the list has been
-    /// drilled into. `None` is the summary of every process.
-    connection_process: Option<String>,
+    /// Which processes have their connections unfolded beneath them. The macOS
+    /// client expands in place rather than pushing a second screen, so several
+    /// programs can be open side by side and compared.
+    expanded_processes: std::collections::HashSet<String>,
     connection_filter: String,
 
     sidebar_collapsed: bool,
@@ -388,6 +397,8 @@ impl Moonlight {
             rule_value: String::new(),
             rule_error: None,
             import_field: String::new(),
+            importing: false,
+            import_done: false,
             helper_installed: false,
             update_status: None,
             update_progress: None,
@@ -398,7 +409,7 @@ impl Moonlight {
             log_source: screens::logs::LogFilter::default(),
             log_filter: String::new(),
             connections: Vec::new(),
-            connection_process: None,
+            expanded_processes: std::collections::HashSet::new(),
             connection_filter: String::new(),
             sidebar_collapsed,
             // Non-None from the start, so the first screen rises in rather than
@@ -520,6 +531,10 @@ impl Moonlight {
                 if self.page != page {
                     self.page = page;
                     self.page_started = Some(Instant::now());
+                    if page != Page::Import {
+                        self.importing = false;
+                        self.import_done = false;
+                    }
                 }
             }
             Message::ToggleSidebar => {
@@ -596,7 +611,12 @@ impl Moonlight {
                 if !url.is_empty() {
                     send(Command::ImportSubscription(url));
                     self.import_field.clear();
-                    self.page = Page::Subscription;
+                    self.last_error = None;
+                    // Stays on this screen: the import is worth confirming where
+                    // it was asked for, rather than dropping the user on the
+                    // subscription page to work out whether it took.
+                    self.importing = true;
+                    self.import_done = false;
                 }
             }
             Message::PasteFromClipboard => {
@@ -782,12 +802,18 @@ impl Moonlight {
             Message::LogFilterSource(source) => self.log_source = source,
             Message::LogFilterText(value) => self.log_filter = value,
             Message::ClearLogs => self.logs.clear(),
-            Message::SelectConnectionProcess(process) => {
-                self.connection_process = process;
-                self.connection_filter.clear();
+            Message::ToggleConnectionProcess(process) => {
+                if !self.expanded_processes.remove(&process) {
+                    self.expanded_processes.insert(process);
+                }
             }
             Message::ConnectionFilterChanged(value) => self.connection_filter = value,
             Message::CloseConnection(id) => send(Command::CloseConnection(id)),
+            Message::CloseProcessConnections(process) => {
+                for connection in self.connections.iter().filter(|c| c.process == process) {
+                    send(Command::CloseConnection(connection.id.clone()));
+                }
+            }
             Message::CloseAllConnections => send(Command::CloseAllConnections),
 
             // The window is undecorated, so moving, minimising, maximising and
@@ -848,7 +874,15 @@ impl Moonlight {
                 }
                 self.state = state;
             }
-            Event::Nodes(nodes) => self.nodes = nodes,
+            Event::Nodes(nodes) => {
+                // Nodes arriving is what "it worked" looks like from here: the
+                // panel answered and the core loaded what it sent.
+                if self.importing && !nodes.is_empty() {
+                    self.importing = false;
+                    self.import_done = true;
+                }
+                self.nodes = nodes;
+            }
             Event::Info(info) => self.info = info,
             Event::Source(source) => self.source = source,
             Event::Uptime(seconds) => self.uptime_seconds = seconds,
@@ -886,7 +920,12 @@ impl Moonlight {
                     self.logs.drain(..excess);
                 }
             }
-            Event::Error(why) => self.last_error = Some(why),
+            Event::Error(why) => {
+                // A failed import goes back to the form with the reason on it,
+                // rather than sitting on a spinner that never resolves.
+                self.importing = false;
+                self.last_error = Some(why);
+            }
             Event::ShutdownComplete => return with_window(iced::window::close),
             Event::PreferencesChanged(preferences) => {
                 // The controller owns the parts of preferences it changes —
@@ -1496,6 +1535,12 @@ impl Moonlight {
     pub fn rule_error(&self) -> Option<&str> {
         self.rule_error.as_deref()
     }
+    pub fn is_importing(&self) -> bool {
+        self.importing
+    }
+    pub fn import_done(&self) -> bool {
+        self.import_done
+    }
     pub fn import_field(&self) -> &str {
         &self.import_field
     }
@@ -1577,14 +1622,23 @@ impl Moonlight {
     ///
     /// That is the question people actually bring to this screen: is *this
     /// program* going through the tunnel.
-    pub fn connection_process(&self) -> Option<&str> {
-        self.connection_process.as_deref()
+    pub fn is_process_expanded(&self, process: &str) -> bool {
+        self.expanded_processes.contains(process)
     }
     pub fn connection_filter(&self) -> &str {
         &self.connection_filter
     }
     /// The node a chain name refers to, so a connection can be shown with the
     /// country it actually left through rather than the group's name.
+    /// The country a chain name leaves through, in the reader's language —
+    /// "Германия" rather than the node's own "Russia -> Germany".
+    pub fn node_country(&self, name: &str) -> Option<String> {
+        self.nodes
+            .iter()
+            .find(|n| n.name == name)
+            .and_then(|n| n.country(self.locale()))
+            .map(str::to_string)
+    }
     pub fn node_region(&self, name: &str) -> Option<String> {
         self.nodes
             .iter()
