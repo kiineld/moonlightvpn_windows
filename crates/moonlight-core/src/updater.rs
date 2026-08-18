@@ -109,19 +109,41 @@ pub fn is_newer(candidate: &str, current: &str) -> bool {
 
 /// Picks the asset to download from a release's attachments.
 ///
-/// The zip, not the bare `.exe`: an update has to replace the core and
-/// `wintun.dll` alongside the app, and a release that only swapped
-/// `moonlight.exe` would leave a new client driving whatever core the previous
-/// install happened to have.
+/// The **installer**, in preference to the zip. Updating used to mean unpacking
+/// the zip over the install directory from a detached batch script, which had to
+/// wait for the app to exit, move the folder aside, unpack, and put it back on
+/// any failure — a lot of moving parts running unattended with no UI, and no way
+/// to register the helper service or refresh a Start Menu entry. Setup does all
+/// of that already, is signed by the same release, and can tell the user what it
+/// is doing.
+///
+/// The zip stays as the fallback, because a release built before the installer
+/// existed has nothing else to offer.
 pub fn pick_asset<'a>(names: impl Iterator<Item = &'a str>) -> Option<&'a str> {
-    let mut candidates: Vec<&str> = names
+    let names: Vec<&str> = names.collect();
+
+    let mut installers: Vec<&str> = names
+        .iter()
+        .copied()
+        .filter(|n| {
+            let lower = n.to_lowercase();
+            lower.ends_with(".exe") && lower.contains("setup")
+        })
+        .collect();
+    installers.sort_unstable();
+    if let Some(installer) = installers.first() {
+        return Some(installer);
+    }
+
+    let mut zips: Vec<&str> = names
+        .into_iter()
         .filter(|n| {
             let lower = n.to_lowercase();
             lower.ends_with(".zip") && (lower.contains("x86_64") || lower.contains("x64"))
         })
         .collect();
-    candidates.sort_unstable();
-    candidates.first().copied()
+    zips.sort_unstable();
+    zips.first().copied()
 }
 
 /// Reads the GitHub releases JSON and decides whether it is worth offering.
@@ -221,6 +243,77 @@ pub async fn download(url: &str, destination: &std::path::Path) -> Result<(), Fa
         .await
         .map_err(|e| Failure::Transport(e.to_string()))?;
     std::fs::write(destination, &bytes).map_err(|e| Failure::Script(e.to_string()))
+}
+
+/// Downloads, reporting how far along it is.
+///
+/// A 21 MB installer on a slow link is thirty seconds of a button that looks
+/// like it did nothing, which is exactly how the old updater read. `progress` is
+/// called with a fraction in 0..=1 as the body arrives.
+///
+/// Falls back to reporting nothing rather than failing when the server sends no
+/// `Content-Length`: an unknown total is a reason for an indeterminate bar, not
+/// for refusing the download.
+pub async fn download_with_progress(
+    url: &str,
+    destination: &std::path::Path,
+    mut progress: impl FnMut(Option<f32>),
+) -> Result<(), Failure> {
+    use futures_util::StreamExt;
+
+    let client = reqwest::Client::builder()
+        .no_proxy()
+        .timeout(std::time::Duration::from_secs(600))
+        .build()
+        .map_err(|e| Failure::Transport(e.to_string()))?;
+
+    let response = client
+        .get(url)
+        .header("User-Agent", "moonlight")
+        .send()
+        .await
+        .map_err(|e| Failure::Transport(e.to_string()))?;
+    if !response.status().is_success() {
+        return Err(Failure::Http(response.status().as_u16()));
+    }
+
+    let total = response.content_length();
+    let mut written: u64 = 0;
+    let mut buffer: Vec<u8> = Vec::with_capacity(total.unwrap_or(0) as usize);
+    let mut stream = response.bytes_stream();
+
+    progress(total.map(|_| 0.0));
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk.map_err(|e| Failure::Transport(e.to_string()))?;
+        written += chunk.len() as u64;
+        buffer.extend_from_slice(&chunk);
+        progress(total.map(|t| (written as f32 / t as f32).clamp(0.0, 1.0)));
+    }
+
+    // Written whole, then moved into place, so an interrupted download cannot
+    // leave a half-installer sitting where a complete one is expected.
+    let partial = destination.with_extension("part");
+    std::fs::write(&partial, &buffer).map_err(|e| Failure::Script(e.to_string()))?;
+    std::fs::rename(&partial, destination).map_err(|e| Failure::Script(e.to_string()))?;
+    Ok(())
+}
+
+/// Hands the downloaded installer to Windows and asks it to run.
+///
+/// The app must then exit: setup replaces the very binary that started it, and
+/// Inno's `CloseApplications` would otherwise be left prompting about a file in
+/// use.
+#[cfg(windows)]
+pub fn launch_installer(installer: &std::path::Path) -> Result<(), Failure> {
+    std::process::Command::new(installer)
+        .spawn()
+        .map(|_| ())
+        .map_err(|e| Failure::Script(e.to_string()))
+}
+
+#[cfg(not(windows))]
+pub fn launch_installer(_installer: &std::path::Path) -> Result<(), Failure> {
+    Err(Failure::Script("Windows only".into()))
 }
 
 /// The batch script that performs the swap after this process exits.
@@ -407,6 +500,39 @@ mod tests {
             "SHA256SUMS.txt",
         ];
         assert_eq!(pick_asset(names.into_iter()), Some("Moonlight-x86_64.zip"));
+    }
+
+    #[test]
+    fn the_installer_wins_over_the_zip() {
+        // Setup registers the helper service, refreshes the Start Menu entry and
+        // can say what it is doing. The zip route was a detached batch script
+        // doing none of that, unattended, with the app already gone.
+        let names = [
+            "Moonlight-Helper.exe",
+            "Moonlight-Setup.exe",
+            "Moonlight-x86_64.zip",
+            "Moonlight.exe",
+            "SHA256SUMS.txt",
+        ];
+        assert_eq!(pick_asset(names.into_iter()), Some("Moonlight-Setup.exe"));
+    }
+
+    #[test]
+    fn a_release_from_before_the_installer_still_offers_its_zip() {
+        // v0.4.0 and earlier have no setup binary, and must remain updatable.
+        let names = ["Moonlight-x86_64.zip", "Moonlight.exe", "SHA256SUMS.txt"];
+        assert_eq!(pick_asset(names.into_iter()), Some("Moonlight-x86_64.zip"));
+    }
+
+    #[test]
+    fn the_bare_executables_are_never_mistaken_for_an_installer() {
+        // `Moonlight.exe` and `Moonlight-Helper.exe` are single binaries for
+        // replacing one file by hand. Downloading one and running it would
+        // launch the app, not update anything.
+        assert_eq!(
+            pick_asset(["Moonlight.exe", "Moonlight-Helper.exe"].into_iter()),
+            None
+        );
     }
 
     #[test]

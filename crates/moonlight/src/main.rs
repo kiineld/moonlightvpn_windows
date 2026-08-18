@@ -229,6 +229,13 @@ pub enum Message {
     /// The line to show, and whether the app must now exit so the swap script
     /// can replace it.
     UpdateChecked((String, bool)),
+    /// How far the installer download has got, 0..=1, or `None` while the size
+    /// is unknown.
+    UpdateProgress(Option<f32>),
+    /// The installer is on disk and ready to run.
+    UpdateReady(std::path::PathBuf),
+    /// Run it, and leave so it can replace this binary.
+    InstallUpdate,
     OpenUrl(&'static str),
 
     LogFilterLevel(u8),
@@ -283,6 +290,11 @@ pub struct Moonlight {
     import_field: String,
     helper_installed: bool,
     update_status: Option<String>,
+    /// Set while the installer is downloading; `None` inside means the total
+    /// size is unknown and the bar is indeterminate.
+    update_progress: Option<Option<f32>>,
+    /// The downloaded installer, once it is ready to be run.
+    update_installer: Option<std::path::PathBuf>,
 
     /// When the process started, for the halo's breath.
     started: Instant,
@@ -371,6 +383,8 @@ impl Moonlight {
             import_field: String::new(),
             helper_installed: false,
             update_status: None,
+            update_progress: None,
+            update_installer: None,
             started: Instant::now(),
             logs: Vec::new(),
             log_level: 1,
@@ -707,9 +721,36 @@ impl Moonlight {
             }
             Message::CheckForUpdates => {
                 self.update_status = Some(t(S::Checking, self.locale()).to_string());
-                return Task::perform(check_updates(self.locale()), Message::UpdateChecked);
+                self.update_installer = None;
+                self.update_progress = None;
+                // A stream rather than one await: the download reports progress
+                // as it arrives, so a 21 MB installer on a slow link is a moving
+                // bar instead of a button that appears to have done nothing.
+                return Task::run(update_stream(self.locale()), |message| message);
+            }
+            Message::UpdateProgress(fraction) => {
+                self.update_progress = Some(fraction);
+                self.update_status = Some(t(S::Downloading, self.locale()).to_string());
+            }
+            Message::UpdateReady(installer) => {
+                self.update_progress = None;
+                self.update_installer = Some(installer);
+                self.update_status = Some(t(S::UpdateReady, self.locale()).to_string());
+            }
+            Message::InstallUpdate => {
+                let Some(installer) = self.update_installer.clone() else {
+                    return Task::none();
+                };
+                match moonlight_core::updater::launch_installer(&installer) {
+                    Err(error) => self.update_status = Some(error.to_string()),
+                    // Setup replaces this very binary, so the app has to go —
+                    // through the ordinary close, which puts the proxy back and
+                    // stops the helper first.
+                    Ok(()) => return self.update(Message::CloseWindow),
+                }
             }
             Message::UpdateChecked((status, restarting)) => {
+                self.update_progress = None;
                 self.update_status = Some(status);
                 if restarting {
                     // The swap script is already waiting on this process id, and
@@ -1183,8 +1224,64 @@ fn elevate(_argument: &str) -> Result<(), String> {
     Err(HELPER_FAILED.to_string())
 }
 
+/// The whole update: check, then download the installer while reporting how far
+/// it has got, then hand back a path to run.
+///
+/// A stream because the UI wants the middle of it, not only the end.
+fn update_stream(locale: AppLocale) -> impl futures_util::Stream<Item = Message> {
+    use moonlight_core::updater::{self, Outcome};
+
+    iced::stream::channel(16, move |mut output: iced::futures::channel::mpsc::Sender<Message>| async move {
+        use futures_util::SinkExt;
+
+        let say = |text: String| Message::UpdateChecked((text, false));
+
+        let release = match updater::check(RELEASES_API, VERSION).await {
+            Err(error) => {
+                let _ = output.send(say(error.to_string())).await;
+                return;
+            }
+            Ok(Outcome::UpToDate { current }) => {
+                let text = match locale {
+                    AppLocale::Ru => format!("Установлена последняя версия ({current})"),
+                    AppLocale::En => format!("You are on the latest version ({current})"),
+                };
+                let _ = output.send(say(text)).await;
+                return;
+            }
+            Ok(Outcome::Available(release)) => release,
+        };
+
+        // Named for the version, so a stale installer from a previous check is
+        // never mistaken for this one.
+        let target = std::env::temp_dir().join(format!("Moonlight-Setup-{}.exe", release.version));
+
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<Option<f32>>();
+        let mut forwarding = output.clone();
+        let pump = tokio::spawn(async move {
+            while let Some(fraction) = rx.recv().await {
+                let _ = forwarding.send(Message::UpdateProgress(fraction)).await;
+            }
+        });
+
+        let outcome =
+            updater::download_with_progress(&release.download_url, &target, move |fraction| {
+                let _ = tx.send(fraction);
+            })
+            .await;
+        pump.abort();
+
+        let message = match outcome {
+            Err(error) => say(error.to_string()),
+            Ok(()) => Message::UpdateReady(target),
+        };
+        let _ = output.send(message).await;
+    })
+}
+
 /// Returns the line to show, and whether the app must now exit so the swap
 /// script can replace it.
+#[allow(dead_code)]
 async fn check_updates(locale: AppLocale) -> (String, bool) {
     use moonlight_core::updater::{self, Outcome};
     match updater::check(RELEASES_API, VERSION).await {
@@ -1399,6 +1496,15 @@ impl Moonlight {
     }
     pub fn log_level(&self) -> u8 {
         self.log_level
+    }
+    /// The download's progress while one is running, or `None` when nothing is
+    /// downloading. The inner `None` means the size is unknown.
+    pub fn update_progress(&self) -> Option<Option<f32>> {
+        self.update_progress
+    }
+    /// The downloaded installer, once there is one to run.
+    pub fn update_installer(&self) -> Option<&std::path::Path> {
+        self.update_installer.as_deref()
     }
     pub fn log_source(&self) -> screens::logs::LogFilter {
         self.log_source

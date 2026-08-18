@@ -319,6 +319,16 @@ fn about(app: &Moonlight) -> Element<'_, Message> {
             .into(),
     };
 
+    // The bar only exists while a download is in flight. An unknown total draws
+    // it full rather than empty: the download is happening either way, and an
+    // empty bar reads as stalled.
+    let progress: Element<'_, Message> = match app.update_progress() {
+        Some(fraction) => container(components::bar(fraction.unwrap_or(1.0), palette, 4.0))
+            .padding([0, 16])
+            .into(),
+        None => vspace(Length::Fixed(0.0)).into(),
+    };
+
     let panel = column![
         row![
             column![
@@ -330,17 +340,37 @@ fn about(app: &Moonlight) -> Element<'_, Message> {
             ]
             .spacing(2),
             hspace(Length::Fill),
-            button(
-                text(t(S::CheckForUpdates, locale))
-                    .size(scale::BODY_SM)
-                    .font(moonlight_design::ui(EMPHATIC))
-            )
-            .on_press(Message::CheckForUpdates)
-            .padding([10, 16])
-            .style(move |_, status| theme::header_button(palette, status)),
+            // Once the installer is on disk the button stops offering to look
+            // again and offers to run it — which is the only thing left to do.
+            if app.update_installer().is_some() {
+                button(
+                    text(t(S::InstallUpdate, locale))
+                        .size(scale::BODY_SM)
+                        .font(moonlight_design::ui(EMPHATIC))
+                        .color(palette.text_on_accent),
+                )
+                .on_press(Message::InstallUpdate)
+                .padding([10, 16])
+                .style(move |_, status| theme::accent_button(palette, status))
+            } else {
+                button(
+                    text(t(S::CheckForUpdates, locale))
+                        .size(scale::BODY_SM)
+                        .font(moonlight_design::ui(EMPHATIC))
+                )
+                // Pressing it again mid-download would start a second one.
+                .on_press_maybe(
+                    app.update_progress()
+                        .is_none()
+                        .then_some(Message::CheckForUpdates)
+                )
+                .padding([10, 16])
+                .style(move |_, status| theme::header_button(palette, status))
+            },
         ]
         .align_y(Alignment::Center)
         .padding([14, 16]),
+        progress,
         components::divider(palette),
         row![
             icon(Icon::Lock, 15.0, palette.accent_ink),
