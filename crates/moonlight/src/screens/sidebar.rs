@@ -27,17 +27,12 @@ const WORDMARK: f32 = 17.0;
 const MARK: f32 = 32.0;
 const MARK_RADIUS: f32 = 10.0;
 
-/// The edge tab.
-///
-/// Drawn as a **full** circle and positioned so exactly half of it is hidden
-/// behind the rail — the visible half is the bulge over the page. This is the
-/// only way to get a true half-disc in iced: a box's corner radius is clamped to
-/// half its *width*, so a 22-wide box asked for a semicircle renders a
-/// rounded rectangle instead. A circle has width == height, so it is never
-/// clamped.
-const TAB_DIAMETER: f32 = 40.0;
-/// How far the circle is tucked behind the rail — exactly half, so what shows is
-/// a semicircle sitting on the seam.
+/// The edge tab: a full circle sitting on the rail's edge, most of it over the
+/// page so the chevron at its centre is plainly centred.
+const TAB_DIAMETER: f32 = 34.0;
+/// How far the circle laps back over the rail. Half its width, so the circle is
+/// centred on the seam — straddling it, half over the rail and half over the
+/// page — rather than floating out on the page side.
 pub const TAB_OVERLAP: f32 = TAB_DIAMETER / 2.0;
 
 /// Where the rail swaps between its two layouts, mid-glide.
@@ -161,39 +156,29 @@ pub fn edge_toggle<'a>(palette: Palette, collapsed: bool) -> Element<'a, Message
     };
 
     button(
-        // The glyph sits in the visible right half of the circle, clear of the
-        // seam it straddles.
+        // Dead centre of the circle — nothing else to reason about.
         container(moonlight_design::icon_thin(glyph, 15.0, palette.text2, 2.4))
-            // Left padding fences off the hidden half; centring then places the
-            // glyph in the middle of the visible half, not the whole circle.
-            .padding(iced::Padding {
-                left: TAB_OVERLAP,
-                ..iced::Padding::ZERO
-            })
-            .center_x(Length::Fill)
-            .center_y(Length::Fixed(TAB_DIAMETER)),
+            .center(Length::Fill),
     )
     .on_press(Message::ToggleSidebar)
     .width(Length::Fixed(TAB_DIAMETER))
     .height(Length::Fixed(TAB_DIAMETER))
     .padding(0)
     .style(move |_, status| {
-        // The rail's own colour, so the visible half reads as the rail bulging
-        // out over the page. No border: a full-circle outline would draw an arc
-        // across the rail where the hidden half sits. The bulge shows because
-        // `bg_deep` is darker than the `bg` page behind it; hover lifts it to
-        // `surface2`.
+        // A surface chip with a hairline, sitting on the seam and drawn over the
+        // rail's last few pixels so it reads as attached. Circle, so its centred
+        // glyph is obviously centred.
         let fill = match status {
-            button::Status::Hovered | button::Status::Pressed => palette.surface2,
-            _ => palette.bg_deep,
+            button::Status::Hovered | button::Status::Pressed => palette.surface3,
+            _ => palette.surface2,
         };
         button::Style {
             background: Some(Background::Color(fill)),
             text_color: palette.text2,
             border: Border {
                 radius: iced::border::Radius::from(TAB_DIAMETER / 2.0),
-                width: 0.0,
-                color: iced::Color::TRANSPARENT,
+                width: border::HAIRLINE,
+                color: palette.hairline,
             },
             ..Default::default()
         }

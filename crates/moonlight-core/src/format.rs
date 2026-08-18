@@ -22,35 +22,6 @@ fn units(locale: AppLocale) -> [&'static str; 6] {
 
 /// Binary units (1024), which is what a panel's `subscription-userinfo` byte
 /// counts mean.
-/// A panel-provided name with emoji and stray symbols removed.
-///
-/// The subscription title comes from the panel — "moonlight vpn 🌙" — and the
-/// emoji renders through the OS emoji font as a colour glyph that has nothing to
-/// do with this flat, two-colour design: on the lime hero card it is a bright
-/// orange blob beside the wordmark. The drawn crescent in the logo is already
-/// the product's moon; the one in the string is noise.
-///
-/// Kept deliberately narrow: it strips the pictographic ranges and their
-/// joiners and variation selectors, and trims the space they leave, so a name in
-/// any actual script — Cyrillic, Latin, anything `is_alphanumeric` — is
-/// untouched.
-pub fn without_emoji(text: &str) -> String {
-    let stripped: String = text
-        .chars()
-        .filter(|c| {
-            let u = *c as u32;
-            let pictographic = (0x1F000..=0x1FAFF).contains(&u) // symbols, emoji, supplemental
-                || (0x2600..=0x27BF).contains(&u)               // misc symbols and dingbats
-                || (0x2B00..=0x2BFF).contains(&u)               // misc symbols and arrows
-                || (0x1F1E6..=0x1F1FF).contains(&u)             // regional indicators
-                || u == 0x200D                                  // zero-width joiner
-                || (0xFE00..=0xFE0F).contains(&u); // variation selectors
-            !pictographic
-        })
-        .collect();
-    stripped.trim().to_string()
-}
-
 pub fn bytes(value: Option<i64>, locale: AppLocale) -> String {
     let Some(value) = value else {
         return "—".to_string();

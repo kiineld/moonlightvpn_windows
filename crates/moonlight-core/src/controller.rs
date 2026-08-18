@@ -1043,8 +1043,15 @@ pub fn os_version() -> String {
     {
         // `cmd /c ver` rather than GetVersionEx, which lies to unmanifested
         // processes and reports 6.2 on Windows 10 and 11 alike.
+        //
+        // CREATE_NO_WINDOW is what stops it: this runs at launch, to build the
+        // subscription's device headers, and without the flag `cmd` flashed a
+        // black console on every start — the one users kept reporting.
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
         std::process::Command::new("cmd")
             .args(["/c", "ver"])
+            .creation_flags(CREATE_NO_WINDOW)
             .output()
             .ok()
             .and_then(|o| String::from_utf8(o.stdout).ok())

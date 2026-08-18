@@ -9,6 +9,7 @@ use moonlight_design::typography::{scale, EMPHATIC};
 use moonlight_design::Icon;
 
 use crate::components;
+use crate::theme;
 use crate::localization::{t, S};
 use crate::{hspace, vspace, Message, Moonlight, Page, TELEGRAM_BOT_URL};
 
@@ -54,9 +55,11 @@ fn plan_card(app: &Moonlight) -> Element<'_, Message> {
             text(t(label, locale))
                 .size(scale::MICRO)
                 .font(moonlight_design::ui(EMPHATIC))
-                // On the accent wash, accent-coloured type would vanish; this is
-                // the role that exists for exactly this position.
-                .color(palette.accent_ink_strong),
+                // Dimmed dark ink, not `accent_ink_strong`. That role is lime in
+                // dark mode — invisible on this solid-lime hero, which is why the
+                // label vanished. Dark ink at 60% reads on both the lime and the
+                // yellow card, matching the macOS hero's own 0.6-opacity labels.
+                .color(theme::alpha(palette.text_on_accent, 0.6)),
             text(value)
                 .font(moonlight_design::display())
                 .size(scale::LEAD)
@@ -76,16 +79,14 @@ fn plan_card(app: &Moonlight) -> Element<'_, Message> {
             text(t(S::Plan, locale))
                 .size(scale::BODY_SM)
                 .font(moonlight_design::ui(EMPHATIC))
-                .color(palette.accent_ink_strong),
+                .color(theme::alpha(palette.text_on_accent, 0.6)),
             hspace(Length::Fill),
             components::pill(status_label.to_string(), status_fill, palette.accent),
         ]
         .align_y(Alignment::Center),
         text(
             info.title
-                .as_deref()
-                .map(format::without_emoji)
-                .filter(|s| !s.is_empty())
+                .clone()
                 .unwrap_or_else(|| t(S::NavSubscription, locale).to_string())
         )
         .font(moonlight_design::display())

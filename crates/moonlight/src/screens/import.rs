@@ -29,10 +29,8 @@ fn activated(app: &Moonlight) -> Element<'_, Message> {
     // that decide whether it was the right one. Each is dropped when the panel
     // does not report it rather than shown as a dash.
     let mut facts: Vec<String> = Vec::new();
-    if let Some(title) = info.title.as_deref().map(format::without_emoji) {
-        if !title.is_empty() {
-            facts.push(format!("«{title}»"));
-        }
+    if let Some(title) = info.title.as_deref() {
+        facts.push(format!("«{title}»"));
     }
     facts.push(format::time_left(info.expire, locale));
     let nodes = app.nodes().iter().filter(|n| !n.is_auto_picker()).count();
