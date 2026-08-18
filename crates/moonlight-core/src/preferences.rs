@@ -116,8 +116,13 @@ pub fn core_data_directory() -> PathBuf {
     support_directory().join("core")
 }
 
+/// The generated config, **inside** the core's own data directory.
+///
+/// mihomo refuses a `-f` that sits outside the `-d` it was given: it reports
+/// "not in SAFE_PATHS" and exits before binding its API, which the app can only
+/// see as a core that never answered. One directory above is still outside.
 pub fn config_path() -> PathBuf {
-    support_directory().join("core.yaml")
+    core_data_directory().join("core.yaml")
 }
 
 impl Preferences {

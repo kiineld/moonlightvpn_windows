@@ -244,6 +244,9 @@ pub enum Message {
     ClearLogs,
     CloseConnection(String),
     CloseAllConnections,
+    /// Drill into one process's connections, or back out with `None`.
+    SelectConnectionProcess(Option<String>),
+    ConnectionFilterChanged(String),
 
     DragWindow,
     ResizeWindow(iced::window::Direction),
@@ -303,6 +306,10 @@ pub struct Moonlight {
     log_source: screens::logs::LogFilter,
     log_filter: String,
     connections: Vec<Connection>,
+    /// The process whose own connections are being shown, if the list has been
+    /// drilled into. `None` is the summary of every process.
+    connection_process: Option<String>,
+    connection_filter: String,
 
     sidebar_collapsed: bool,
     /// When the current screen appeared, for its entrance. Set by anything that
@@ -391,6 +398,8 @@ impl Moonlight {
             log_source: screens::logs::LogFilter::default(),
             log_filter: String::new(),
             connections: Vec::new(),
+            connection_process: None,
+            connection_filter: String::new(),
             sidebar_collapsed,
             // Non-None from the start, so the first screen rises in rather than
             // being simply present when the window appears.
@@ -773,6 +782,11 @@ impl Moonlight {
             Message::LogFilterSource(source) => self.log_source = source,
             Message::LogFilterText(value) => self.log_filter = value,
             Message::ClearLogs => self.logs.clear(),
+            Message::SelectConnectionProcess(process) => {
+                self.connection_process = process;
+                self.connection_filter.clear();
+            }
+            Message::ConnectionFilterChanged(value) => self.connection_filter = value,
             Message::CloseConnection(id) => send(Command::CloseConnection(id)),
             Message::CloseAllConnections => send(Command::CloseAllConnections),
 
@@ -1563,6 +1577,20 @@ impl Moonlight {
     ///
     /// That is the question people actually bring to this screen: is *this
     /// program* going through the tunnel.
+    pub fn connection_process(&self) -> Option<&str> {
+        self.connection_process.as_deref()
+    }
+    pub fn connection_filter(&self) -> &str {
+        &self.connection_filter
+    }
+    /// The node a chain name refers to, so a connection can be shown with the
+    /// country it actually left through rather than the group's name.
+    pub fn node_region(&self, name: &str) -> Option<String> {
+        self.nodes
+            .iter()
+            .find(|n| n.name == name)
+            .and_then(|n| n.region_code())
+    }
     pub fn connections_by_process(&self) -> Vec<(String, Vec<&Connection>)> {
         let mut grouped: HashMap<&str, Vec<&Connection>> = HashMap::new();
         for connection in &self.connections {

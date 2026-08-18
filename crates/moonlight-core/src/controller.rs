@@ -667,6 +667,11 @@ impl Controller {
         };
 
         let path = preferences::config_path();
+        // The config lives inside the core's data directory, which may not exist
+        // on a first run.
+        if let Some(parent) = path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
         if let Err(error) = std::fs::write(&path, &config) {
             return self.fail(format!("Could not write the core config: {error}"));
         }

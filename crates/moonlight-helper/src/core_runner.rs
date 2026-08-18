@@ -22,8 +22,11 @@ pub fn core_binary() -> PathBuf {
 }
 
 /// The service's own config file. The client never names this.
+///
+/// Inside the data directory, not beside it: mihomo rejects a `-f` outside the
+/// `-d` it was handed, with "not in SAFE_PATHS".
 pub fn config_path() -> PathBuf {
-    PathBuf::from(INSTALL_ROOT).join("core.yaml")
+    data_directory().join("core.yaml")
 }
 
 pub fn data_directory() -> PathBuf {

@@ -177,6 +177,8 @@ strings! {
     ActiveConnections => "Активно"          / "Active",
     NoLogs          => "Пока ничего не записано" / "Nothing logged yet",
     CloseAll        => "Закрыть все"        / "Close all",
+    ColProcess      => "ПРОЦЕСС"            / "PROCESS",
+    ColHost         => "ХОСТ"               / "HOST",
     ClearLogs       => "Очистить"           / "Clear",
     FilterText      => "Фильтр"             / "Filter",
 
