@@ -148,7 +148,11 @@ fn traffic_card(app: &Moonlight) -> Element<'_, Message> {
         );
     }
 
-    components::card(content, palette)
+    // A panel, not a card: `card` is surface-2, which in light mode is #F1F3EB
+    // against a #F2F3ED page — a one-value difference nobody can see, so the
+    // bar and its labels floated on the background with no card around them.
+    // Every other card on this screen is the white surface with a hairline.
+    components::surface(content, palette)
 }
 
 fn actions(app: &Moonlight) -> iced::widget::Column<'_, Message> {

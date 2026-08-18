@@ -16,9 +16,30 @@ use crate::{hspace, theme, vspace, Message, Moonlight, Page};
 /// The dial's drawn size, from the composition.
 const DIAL: f32 = metrics::DIAL;
 
-/// The dial's big label. Smaller than `--ml-t-hero`: 40px does not fit inside a
-/// 238px ring alongside a status line and a timer, and the composition sets 26.
+/// The dial's big label. Smaller than `--ml-t-hero`: 40px does not fit inside
+/// the ring alongside a status line and a timer, and the composition sets 26.
 const BIG_LABEL: f32 = 26.0;
+
+/// The widest the label may be: the chord across the ring where the label sits,
+/// less the 2px stroke and a margin, so type never touches the circle.
+const CHORD: f32 = DIAL * 0.78;
+
+/// The display face's advance per character, in ems.
+///
+/// Measured off `Unbounded-ExtraBold.ttf` rather than guessed: Cyrillic runs
+/// 0.83–0.85 em at this weight and Latin 0.73–0.79, so the Cyrillic worst case
+/// is the one to size against. An earlier pass assumed 0.62, which is why the
+/// label never shrank and crossed the ring instead.
+const LABEL_ADVANCE: f32 = 0.85;
+
+/// How big the label can be and still fit the chord.
+///
+/// iced has no `minimumScaleFactor`, so the shrink is computed rather than left
+/// to the text widget — which would wrap or spill instead.
+fn dial_label_size(label: &str) -> f32 {
+    let characters = label.chars().count().max(1) as f32;
+    (CHORD / (characters * LABEL_ADVANCE)).min(BIG_LABEL)
+}
 
 /// The stats strip's figures.
 const STAT_VALUE: f32 = 20.0;
@@ -114,18 +135,21 @@ fn dial_column(app: &Moonlight) -> Element<'_, Message> {
         ]
         .spacing(7)
         .align_y(Alignment::Center),
-        // Kept inside the ring. "Подключение…" at 26px is wider than the dial's
-        // usable width, and ran out over both edges of the circle; the label is
-        // given the chord to live in and shrinks to fit rather than overflowing.
+        // Kept inside the ring, by *shrinking* rather than by being given a
+        // narrow box to overflow. Constraining the width alone did not work:
+        // iced wraps or spills, it does not scale type down the way the macOS
+        // client's `minimumScaleFactor` does, so "Подключение…" still crossed
+        // both edges of the circle.
         container(
             text(t(action, locale))
                 .font(moonlight_design::display())
-                .size(BIG_LABEL)
+                .size(dial_label_size(t(action, locale)))
                 .line_height(line::TIGHT)
                 .align_x(Alignment::Center)
+                .wrapping(iced::widget::text::Wrapping::None)
                 .color(dim(palette.text)),
         )
-        .width(Length::Fixed(DIAL * 0.74))
+        .width(Length::Fixed(CHORD))
         .align_x(Alignment::Center),
         text(format::duration(app.uptime()))
             .font(moonlight_design::mono())
@@ -510,4 +534,56 @@ fn node_row<'a>(app: &'a Moonlight, node: &'a Node, selected: bool) -> Element<'
         .width(Length::Fill)
         .style(move |_, status| theme::row_button(palette, selected, status))
         .into()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::localization::t;
+    use moonlight_core::AppLocale;
+
+    /// Every string the dial's big label is ever set to, in both languages.
+    fn labels() -> Vec<String> {
+        let mut out = Vec::new();
+        for locale in [AppLocale::Ru, AppLocale::En] {
+            for key in [S::Connect, S::Connection, S::Connecting, S::Disconnecting] {
+                out.push(t(key, locale).to_string());
+            }
+        }
+        out
+    }
+
+    #[test]
+    fn no_dial_label_is_wider_than_the_ring() {
+        // The failure this guards is not a panic: the label simply crosses the
+        // circle and sits on top of it, which looks like a broken layout rather
+        // than a long word.
+        for label in labels() {
+            let width = label.chars().count() as f32 * dial_label_size(&label) * LABEL_ADVANCE;
+            assert!(
+                width <= CHORD + 0.5,
+                "{label:?} renders {width:.0}pt wide in a {CHORD:.0}pt chord"
+            );
+        }
+    }
+
+    #[test]
+    fn a_short_label_still_gets_the_full_display_step() {
+        // Shrinking is for the ones that need it. "Подключить" must not come out
+        // smaller than the composition sets simply because the rule exists.
+        assert_eq!(dial_label_size(t(S::Connect, AppLocale::Ru)), BIG_LABEL);
+        assert_eq!(dial_label_size(t(S::Connection, AppLocale::Ru)), BIG_LABEL);
+    }
+
+    #[test]
+    fn the_long_labels_are_shrunk_rather_than_clipped() {
+        // "Подключение…" and "Отключение…" are the two that do not fit at the
+        // composition's 26.
+        for key in [S::Connecting, S::Disconnecting] {
+            let long = t(key, AppLocale::Ru);
+            assert!(dial_label_size(long) < BIG_LABEL, "{long:?} was not shrunk");
+            // But not so far that it stops reading as the dial's headline.
+            assert!(dial_label_size(long) > 16.0, "{long:?} shrank too far");
+        }
+    }
 }

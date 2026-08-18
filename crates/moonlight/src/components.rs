@@ -433,15 +433,6 @@ pub fn bar<'a, M: 'a>(fraction: f32, palette: Palette, height: f32) -> Element<'
     track.height(Length::Fixed(height)).into()
 }
 
-/// A card: surface, rounded, padded.
-pub fn card<'a, M: 'a>(content: impl Into<Element<'a, M>>, palette: Palette) -> Element<'a, M> {
-    container(content)
-        .padding(moonlight_design::motion::metrics::PAD_CARD)
-        .width(Length::Fill)
-        .style(move |_| theme::card(palette))
-        .into()
-}
-
 /// A panel: the outer surface a screen's columns sit on.
 pub fn surface<'a, M: 'a>(content: impl Into<Element<'a, M>>, palette: Palette) -> Element<'a, M> {
     container(content)
