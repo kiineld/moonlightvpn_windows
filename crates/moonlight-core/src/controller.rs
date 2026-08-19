@@ -767,7 +767,15 @@ impl Controller {
         self.set_state(ConnectionState::Disconnecting);
         self.narrate("INFO", "Disconnecting");
 
-        // Proxy settings come back first: if anything below hangs, the machine
+        // Every connection through the tunnel goes first, while the core is
+        // still up to be told. Restoring the proxy settings only stops *new*
+        // connections being sent to the core: the ones already established keep
+        // flowing through it, so without this a disconnect left live sessions
+        // running through the tunnel and the Connections screen — correctly —
+        // still listing them.
+        let _ = self.api.close_all_connections().await;
+
+        // Proxy settings come back next: if anything below hangs, the machine
         // is not left pointed at a core that is going away.
         if let Some(snapshot) = self.preferences.proxy_snapshot.take() {
             system_proxy::restore(&snapshot);
@@ -787,6 +795,12 @@ impl Controller {
         self.emit(Event::Uptime(0));
         self.emit(Event::Rates { up: 0, down: 0 });
         self.emit(Event::Session { up: 0, down: 0 });
+        // The tunnel is down, so every connection through it is gone. Said here
+        // rather than left to the next poll: the core is about to restart and
+        // will not answer for a moment, and until it does the Connections screen
+        // would keep showing the finished session's rows as though they were
+        // live.
+        self.emit(Event::Connections(Vec::new()));
 
         // Back to a warm idle core, so the next ping is immediate.
         self.restart_core().await;
@@ -969,9 +983,12 @@ impl Controller {
     }
 
     async fn refresh_connections(&self) {
-        if let Ok(connections) = self.api.connections().await {
-            self.emit(Event::Connections(connections));
-        }
+        // A failed call means the core is not answering — it is restarting, or
+        // it is gone. Either way the honest answer is "nothing": keeping the
+        // last one leaves a frozen list on screen that still reads as live, with
+        // its ages ticking up against connections that no longer exist.
+        let connections = self.api.connections().await.unwrap_or_default();
+        self.emit(Event::Connections(connections));
     }
 
     async fn shutdown(&mut self) {
