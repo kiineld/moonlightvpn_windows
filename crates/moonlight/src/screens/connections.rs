@@ -336,7 +336,15 @@ fn heading(palette: Palette, locale: AppLocale) -> Element<'static, Message> {
         .spacing(10)
         .align_y(Alignment::Center),
     )
-    .padding([0, 14])
+    // The rows below sit inside the surface's own padding and then the row
+    // button's, and the scrollable reserves a gutter on the right. The heading
+    // is outside all three, so it has to add them back — otherwise every column
+    // label stands 18pt left of the figures it names.
+    .padding(iced::Padding {
+        left: components::SURFACE_PADDING + 14.0,
+        right: components::SURFACE_PADDING + 14.0 + crate::SCROLLBAR_GUTTER,
+        ..iced::Padding::ZERO
+    })
     .center_y(Length::Fixed(30.0))
     .into()
 }
@@ -391,14 +399,20 @@ fn chain_cell<'a>(app: &'a Moonlight, connection: Option<&'a Connection>) -> Ele
         text(app.node_country(node).unwrap_or_else(|| node.to_string()))
             .size(scale::META)
             .font(moonlight_design::ui(EMPHATIC))
-            .color(palette.accent_ink),
+            .color(palette.accent_ink)
+            .wrapping(text::Wrapping::None),
     );
-    cell = cell.push(moonlight_design::icon_thin(
-        Icon::Zap,
-        11.0,
-        palette.accent_ink,
-        2.4,
-    ));
+    // The zap belongs to the *server's name*, not to the fact that traffic was
+    // tunnelled. Drawn unconditionally it claimed a mark the server did not
+    // carry in the list, so the two screens disagreed about the same node.
+    if node.contains('\u{26a1}') {
+        cell = cell.push(moonlight_design::icon_thin(
+            Icon::Zap,
+            11.0,
+            palette.accent_ink,
+            2.4,
+        ));
+    }
 
     container(cell).width(Length::Fixed(CHAIN)).into()
 }

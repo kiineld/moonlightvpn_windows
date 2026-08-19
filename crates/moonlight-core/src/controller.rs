@@ -181,6 +181,11 @@ pub struct Controller {
     pinging: bool,
     /// Nodes a probe pass has actually covered this session.
     probed: std::collections::HashSet<String>,
+    /// The per-connection polling task. Held so it can be stopped on disconnect
+    /// — it captures the moment the tunnel came up, and left running it keeps
+    /// reporting an ever-growing uptime over the `0` disconnect wrote, so the
+    /// timer never returned to zero.
+    polling: Option<tokio::task::JoinHandle<()>>,
 }
 
 impl Controller {
@@ -205,6 +210,7 @@ impl Controller {
             session_base: Traffic::default(),
             pinging: false,
             probed: std::collections::HashSet::new(),
+            polling: None,
         }
     }
 
@@ -572,6 +578,23 @@ impl Controller {
             node.protocol_label = labels.get(&node.name).cloned();
         }
 
+        // Back into the panel's own order. mihomo returns a selector's members
+        // in the group's order — its explicit entries, then everything
+        // `include-all` swept up — which scatters each transit group away from
+        // the server it fronts. The other clients show the document's order, and
+        // so does this one now. The auto-picker stays first: it is a choice
+        // about the list, not an entry in it.
+        if let Some(yaml) = self.panel_yaml.as_deref() {
+            let order = mihomo_config::panel_order(yaml);
+            nodes.sort_by_key(|node| {
+                if node.is_auto_picker() {
+                    (0, 0)
+                } else {
+                    (1, order.get(&node.name).copied().unwrap_or(usize::MAX))
+                }
+            });
+        }
+
         let live: Vec<String> = nodes.iter().map(|n| n.name.clone()).collect();
         self.preferences.prune_latencies(&live);
         self.save();
@@ -757,22 +780,35 @@ impl Controller {
         }
 
         self.connected_at = None;
+        // Stop the polling task first, or its next tick overwrites the zero
+        // below with the old session's uptime and the timer keeps running.
+        self.stop_polling();
         self.set_state(ConnectionState::Disconnected);
         self.emit(Event::Uptime(0));
         self.emit(Event::Rates { up: 0, down: 0 });
+        self.emit(Event::Session { up: 0, down: 0 });
 
         // Back to a warm idle core, so the next ping is immediate.
         self.restart_core().await;
     }
 
+    /// Stops the polling task, if one is running.
+    fn stop_polling(&mut self) {
+        if let Some(handle) = self.polling.take() {
+            handle.abort();
+        }
+    }
+
     /// Uptime, rates and session totals, once a second while connected.
-    fn start_polling(&self) {
+    fn start_polling(&mut self) {
+        // A previous session's task must not outlive this one and race it.
+        self.stop_polling();
         let api = Arc::clone(&self.api);
         let events = self.events.clone();
         let started = self.connected_at;
         let base = self.session_base;
 
-        tokio::spawn(async move {
+        self.polling = Some(tokio::spawn(async move {
             let mut traffic = api.traffic_stream();
             let mut ticker = tokio::time::interval(Duration::from_secs(1));
             loop {
@@ -799,7 +835,7 @@ impl Controller {
                     }
                 }
             }
-        });
+        }));
     }
 
     async fn select_node(&mut self, name: String) {

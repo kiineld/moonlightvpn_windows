@@ -434,9 +434,11 @@ pub fn bar<'a, M: 'a>(fraction: f32, palette: Palette, height: f32) -> Element<'
 }
 
 /// A panel: the outer surface a screen's columns sit on.
+pub const SURFACE_PADDING: f32 = 18.0;
+
 pub fn surface<'a, M: 'a>(content: impl Into<Element<'a, M>>, palette: Palette) -> Element<'a, M> {
     container(content)
-        .padding(18)
+        .padding(SURFACE_PADDING)
         .width(Length::Fill)
         .style(move |_| theme::panel(palette))
         .into()

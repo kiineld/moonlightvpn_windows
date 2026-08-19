@@ -390,9 +390,146 @@ pub fn dns_block(existing: Option<Mapping>) -> Mapping {
     dns
 }
 
+
+/// The order the panel itself lists its servers in.
+///
+/// mihomo hands back a selector's members in *its* order — the group's explicit
+/// entries first, then everything `include-all` swept up — which is not the
+/// order the panel's document lists them in, and so not the order the macOS and
+/// mobile clients show. There the destinations come in document order with each
+/// transit group sitting beside the server it fronts (Finland, then
+/// `Russia -> Finland`), and the squads stay in their blocks.
+///
+/// This reads that order back out of the subscription: every proxy is ranked by
+/// its position in `proxies:`, and a group is ranked by the first member it
+/// covers — resolved through the group's explicit list, or through the `filter`
+/// an `include-all` group selects its members with.
+pub fn panel_order(yaml: &str) -> std::collections::HashMap<String, usize> {
+    let mut order = std::collections::HashMap::new();
+    let Ok(document) = serde_yaml::from_str::<Value>(yaml) else {
+        return order;
+    };
+
+    let names: Vec<String> = document
+        .get("proxies")
+        .and_then(Value::as_sequence)
+        .map(|proxies| {
+            proxies
+                .iter()
+                .filter_map(|proxy| {
+                    proxy
+                        .get("name")
+                        .and_then(Value::as_str)
+                        .map(str::to_string)
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+
+    for (index, name) in names.iter().enumerate() {
+        order.insert(name.clone(), index);
+    }
+
+    let Some(groups) = document.get("proxy-groups").and_then(Value::as_sequence) else {
+        return order;
+    };
+
+    // Two passes, so a group whose members are themselves groups still lands:
+    // the first pass ranks the groups that sit directly on proxies, the second
+    // sees those ranks.
+    for _ in 0..2 {
+        for group in groups {
+            let Some(name) = group.get("name").and_then(Value::as_str) else {
+                continue;
+            };
+            if order.contains_key(name) {
+                continue;
+            }
+
+            let mut rank: Option<usize> = None;
+
+            if let Some(members) = group.get("proxies").and_then(Value::as_sequence) {
+                for member in members.iter().filter_map(Value::as_str) {
+                    if let Some(&at) = order.get(member) {
+                        rank = Some(rank.map_or(at, |best: usize| best.min(at)));
+                    }
+                }
+            }
+
+            // `include-all` groups name no members; what they take is whatever
+            // the filter matches, so the filter is where their position is.
+            if rank.is_none() {
+                if let Some(filter) = group.get("filter").and_then(Value::as_str) {
+                    if let Ok(pattern) = regex::Regex::new(filter) {
+                        for (index, candidate) in names.iter().enumerate() {
+                            if pattern.is_match(candidate) {
+                                rank = Some(rank.map_or(index, |best: usize| best.min(index)));
+                            }
+                        }
+                    }
+                }
+            }
+
+            if let Some(rank) = rank {
+                order.insert(name.to_string(), rank);
+            }
+        }
+    }
+
+    order
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn panel_order_follows_the_document_and_seats_groups_beside_their_members() {
+        // The shape the panel actually sends: destinations in document order,
+        // each transit balancer sitting next to the server it fronts, and the
+        // selector listing the transit groups first — which is the order this
+        // client used to show, and the one being corrected.
+        let yaml = r#"
+proxies:
+  - {name: "RU", type: vless}
+  - {name: "FI", type: vless}
+  - {name: "Russia Finland Balance 1", type: vless}
+  - {name: "DE", type: vless}
+  - {name: "Russia Germany Balance 1", type: vless}
+proxy-groups:
+  - name: "picker"
+    type: select
+    include-all: true
+    proxies: ["Auto", "RU -> DE", "RU -> FI"]
+  - name: "RU -> FI"
+    type: load-balance
+    filter: "Russia Finland Balance"
+    proxies: []
+  - name: "RU -> DE"
+    type: load-balance
+    filter: "Russia Germany Balance"
+    proxies: []
+"#;
+        let order = panel_order(yaml);
+
+        assert_eq!(order.get("RU"), Some(&0));
+        assert_eq!(order.get("FI"), Some(&1));
+        assert_eq!(order.get("DE"), Some(&3));
+        // Each balancer takes the position of the proxy its filter selects, so
+        // it sorts next to that server rather than up with the other groups.
+        assert_eq!(order.get("RU -> FI"), Some(&2));
+        assert_eq!(order.get("RU -> DE"), Some(&4));
+
+        let mut listed = vec!["DE", "RU -> FI", "RU", "RU -> DE", "FI"];
+        listed.sort_by_key(|name| order.get(*name).copied().unwrap_or(usize::MAX));
+        assert_eq!(listed, ["RU", "FI", "RU -> FI", "DE", "RU -> DE"]);
+    }
+
+    #[test]
+    fn panel_order_is_empty_when_the_document_has_no_proxies() {
+        assert!(panel_order("rules: []").is_empty());
+        assert!(panel_order("not: [valid").is_empty());
+    }
     use crate::split_rule::Kind;
 
     const PANEL: &str = r#"
