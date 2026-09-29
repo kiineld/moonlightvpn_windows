@@ -21,14 +21,18 @@ pub const VALUE_NAME: &str = "Moonlight";
 #[cfg(windows)]
 pub use imp::{is_enabled, set_enabled};
 
+/// The flag a sign-in launch carries, so it starts in the tray rather than
+/// putting a window in front of whatever the user sat down to do.
+pub const AUTOSTART_FLAG: &str = "--autostart";
+
 /// The command the Run key stores: the executable's own path, quoted so a path
-/// containing spaces survives the shell that expands it.
+/// containing spaces survives the shell that expands it, and the flag.
 ///
 /// Split out from the registry write so it can be tested off Windows — the
 /// quoting is the part that goes wrong, and `C:\Program Files\...` is the
 /// default install location.
 pub fn run_command(executable: &std::path::Path) -> String {
-    format!("\"{}\"", executable.display())
+    format!("\"{}\" {AUTOSTART_FLAG}", executable.display())
 }
 
 #[cfg(windows)]
@@ -148,7 +152,7 @@ mod tests {
         let path = PathBuf::from(r"C:\Program Files\Moonlight\moonlight.exe");
         let command = run_command(&path);
         assert!(command.starts_with('"'));
-        assert!(command.ends_with('"'));
+        assert!(command.ends_with(&format!("\" {AUTOSTART_FLAG}")));
         assert!(command.contains("Program Files"));
     }
 

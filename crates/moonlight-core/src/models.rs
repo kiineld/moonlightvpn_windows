@@ -39,6 +39,10 @@ pub struct Node {
     /// which reports only the bare type.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub protocol_label: Option<String>,
+    /// The service's own note on the server ("Доступность во время БС 🌟"),
+    /// shown under its name.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
 }
 
 /// The Unicode block flag emoji are built from. Two regional indicators are
@@ -61,6 +65,7 @@ impl Node {
             probed: false,
             is_group: false,
             protocol_label: None,
+            description: None,
         }
     }
 
@@ -253,6 +258,35 @@ impl ConnectionState {
 /// them, while TUN takes a virtual interface and captures everything. Only TUN
 /// can enforce per-app rules, which is why the split-tunnel screen is inert
 /// without it.
+/// How the core routes what reaches it — mihomo's own `mode`.
+///
+/// Separate from [`TunnelMode`], which is how traffic *reaches* the core.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum RoutingMode {
+    /// The subscription's rules decide, site by site.
+    #[default]
+    Rule,
+    /// Everything through the chosen server.
+    Global,
+    /// Nothing through a server; the tunnel stays up but passes traffic
+    /// straight out.
+    Direct,
+}
+
+impl RoutingMode {
+    pub const ALL: [RoutingMode; 3] = [RoutingMode::Rule, RoutingMode::Global, RoutingMode::Direct];
+
+    /// The value of mihomo's `mode`.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            RoutingMode::Rule => "rule",
+            RoutingMode::Global => "global",
+            RoutingMode::Direct => "direct",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum TunnelMode {

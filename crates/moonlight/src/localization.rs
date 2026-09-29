@@ -215,6 +215,31 @@ strings! {
     ClearLogs       => "Очистить"           / "Clear",
     FilterText      => "Фильтр"             / "Filter",
 
+    // Tray panel
+    TrayStateOn     => "Подключено"         / "Connected",
+    TrayStateOff    => "Отключено"          / "Disconnected",
+    TrayStateFailed => "Ошибка"             / "Failed",
+    TrayRules       => "По правилам"        / "Rules",
+    TrayGlobal      => "Глобальный"         / "Global",
+    TrayDirect      => "Напрямую"           / "Direct",
+    SearchServers   => "Поиск серверов"     / "Search servers",
+    PingAll         => "Пинг всех"          / "Ping all",
+    NothingFound    => "Ничего не найдено"  / "Nothing found",
+    OpenWindow      => "Открыть"            / "Open",
+    DisconnectVerb  => "Отключиться"        / "Disconnect",
+
+    // Notifications
+    Notifications   => "Уведомления"        / "Notifications",
+    NotificationsNote => "Когда заканчивается тариф или трафик" / "When the plan or traffic runs out",
+    NotifyExpiringTitle => "Подписка заканчивается" / "Your subscription is ending",
+    NotifyExpiringBody => "Осталось {days}. Продлите её в боте, чтобы не остаться без VPN." / "{days} left. Renew it in the bot to stay connected.",
+    NotifyExpiredTitle => "Подписка закончилась" / "Your subscription has ended",
+    NotifyExpiredBody => "Продлите её в боте, чтобы снова подключиться." / "Renew it in the bot to connect again.",
+    NotifyTrafficLowTitle => "Трафик почти закончился" / "Traffic is running out",
+    NotifyTrafficLowBody => "Осталось {left} из {total}." / "{left} left of {total}.",
+    NotifyTrafficOutTitle => "Трафик закончился" / "You are out of traffic",
+    NotifyTrafficOutBody => "Продлите подписку в боте, чтобы снова подключиться." / "Renew the subscription in the bot to connect again.",
+
     // Shared
     Cancel          => "Отмена"             / "Cancel",
     Save            => "Сохранить"          / "Save",

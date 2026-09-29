@@ -12,6 +12,7 @@ pub mod format;
 pub mod geodata;
 pub mod helper;
 pub mod hwid;
+pub mod instance;
 pub mod issue;
 pub mod mihomo_config;
 pub mod models;
@@ -22,9 +23,11 @@ pub mod share_link;
 pub mod split_rule;
 pub mod subscription;
 pub mod system_proxy;
+pub mod tray;
 pub mod updater;
 
 pub use issue::Issue;
 pub use models::{
-    AppEntry, AppLocale, ConnectionState, Node, SplitMode, SubscriptionInfo, TunnelMode,
+    AppEntry, AppLocale, ConnectionState, Node, RoutingMode, SplitMode, SubscriptionInfo,
+    TunnelMode,
 };

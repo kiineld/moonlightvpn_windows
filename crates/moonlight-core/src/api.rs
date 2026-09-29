@@ -200,6 +200,7 @@ impl MihomoApi {
                     kind,
                     server: None,
                     protocol_label: None,
+                    description: None,
                 })
             })
             .collect())
@@ -467,7 +468,7 @@ impl MihomoApi {
 
 /// How long a probe waits before the node reads as `n/a`. 3000 ms gave up on
 /// servers that were merely slow — the LTE balancers among them.
-const PROBE_TIMEOUT_MS: u32 = 5_000;
+pub const PROBE_TIMEOUT_MS: u32 = 5_000;
 
 /// `history` is the core's own record of past delay probes; its last entry is
 /// what the UI shows until a fresh probe replaces it.

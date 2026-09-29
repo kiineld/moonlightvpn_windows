@@ -97,13 +97,21 @@ fn main() -> iced::Result {
     // A face the fetch script has not downloaded is staged as an empty file by
     // build.rs; the font database rejects it and text falls back to the system
     // font, which is the intended degraded state.
-    iced::application(Moonlight::new, Moonlight::update, Moonlight::view)
+    //
+    // One copy at a time: a second launch hands its request to the first and
+    // leaves before it has touched anything — see `moonlight_core::instance`.
+    if !moonlight_core::instance::claim() {
+        let request = moonlight_core::instance::request_from_args(std::env::args());
+        moonlight_core::instance::forward(&request);
+        return Ok(());
+    }
+
+    // A daemon rather than an application: the app outlives its window (it
+    // closes to the tray) and has a second one, the tray panel.
+    iced::daemon(Moonlight::new, Moonlight::update, Moonlight::view)
         .title(Moonlight::title)
         .subscription(Moonlight::subscription)
         .theme(Moonlight::iced_theme)
-        .window_size((1240.0, 820.0))
-        .centered()
-        .decorations(false)
         .font(moonlight_design::FONT_BYTES[0])
         .font(moonlight_design::FONT_BYTES[1])
         .font(moonlight_design::FONT_BYTES[2])
@@ -217,6 +225,23 @@ pub enum Message {
     HideRefreshNote(u64),
     /// The service's own support contact when it sent one, else the app's.
     OpenSupport,
+
+    /// The tray icon was clicked, at this point on the screen.
+    TrayClicked(moonlight_core::tray::Click),
+    /// A second launch asked for something: `show`, or a link.
+    Request(String),
+    WindowEvent(iced::window::Id, iced::window::Event),
+    /// Bring the main window up, opening a new one if it was closed.
+    OpenMain,
+    /// The window, on this page.
+    OpenPage(Page),
+    TogglePin,
+    TraySearch(String),
+    SetRoutingMode(moonlight_core::RoutingMode),
+    PingNode(String),
+    ToggleNotifications,
+    /// Leave: put the machine back, then exit.
+    Quit,
 
     ImportChanged(String),
     ImportSubmit,
@@ -363,6 +388,21 @@ pub struct Moonlight {
     flags: std::collections::HashSet<String>,
     /// Off in tests, so preference changes stay in memory.
     persist: bool,
+
+    /// The main window, while it is open. Closing it leaves the app in the
+    /// tray; `OpenMain` makes a new one.
+    main_window: Option<iced::window::Id>,
+    /// The tray panel, while it is open.
+    tray_window: Option<iced::window::Id>,
+    /// Whether there is a tray icon at all. Without one, closing the window
+    /// must quit, or the app would be left running with no way back to it.
+    has_tray: bool,
+    tray_pinned: bool,
+    tray_search: String,
+    /// When the panel last closed because it lost focus. A click on the tray
+    /// icon takes focus from the panel first, so without this the click that
+    /// meant "close" closed it and then opened it again.
+    tray_blurred: Option<Instant>,
 }
 
 impl Moonlight {
@@ -372,7 +412,12 @@ impl Moonlight {
         // removed the entry with msconfig while the app was shut must not come
         // back to a switch that still reads "on".
         preferences.launch_at_login = moonlight_core::autostart::is_enabled();
-        let app = Moonlight::with_preferences(preferences.clone());
+        // Rewritten so an entry from an older version, or one pointing at a
+        // copy that has since moved, carries this executable and its flag.
+        if preferences.launch_at_login {
+            moonlight_core::autostart::set_enabled(true);
+        }
+        let mut app = Moonlight::with_preferences(preferences.clone());
 
         // The controller owns everything below the UI and runs in its own task.
         let (command_tx, command_rx) = tokio::sync::mpsc::unbounded_channel();
@@ -385,9 +430,40 @@ impl Moonlight {
         });
         send(Command::Start);
 
+        // The tray icon and the pipe a second launch talks to both feed one
+        // stream of messages into the app.
+        let (outside_tx, outside_rx) = tokio::sync::mpsc::unbounded_channel();
+        let _ = OUTSIDE.set(Mutex::new(Some(outside_rx)));
+        if let Some(mut clicks) = moonlight_core::tray::spawn(&app.title_text()) {
+            app.has_tray = true;
+            let outside = outside_tx.clone();
+            tokio::spawn(async move {
+                while let Some(click) = clicks.recv().await {
+                    let _ = outside.send(Message::TrayClicked(click));
+                }
+            });
+        }
+        let (request_tx, mut request_rx) = tokio::sync::mpsc::unbounded_channel();
+        tokio::spawn(moonlight_core::instance::serve(request_tx));
+        tokio::spawn(async move {
+            while let Some(request) = request_rx.recv().await {
+                let _ = outside_tx.send(Message::Request(request));
+            }
+        });
+
+        // A sign-in launch starts in the tray, as the setting promises — unless
+        // there is no tray to start in.
+        let at_sign_in = std::env::args().any(|a| a == moonlight_core::autostart::AUTOSTART_FLAG);
+        let window = if at_sign_in && app.has_tray {
+            Task::none()
+        } else {
+            app.open_main()
+        };
+
         (
             app,
             Task::batch([
+                window,
                 Task::perform(scan_apps(), Message::AppsScanned),
                 // Started, not merely checked: the service is on-demand now, so
                 // it comes up with the app and goes down with it.
@@ -450,10 +526,20 @@ impl Moonlight {
             previous_palette: None,
             flags: available_flags(),
             persist: true,
+            main_window: None,
+            tray_window: None,
+            has_tray: false,
+            tray_pinned: false,
+            tray_search: String::new(),
+            tray_blurred: None,
         }
     }
 
-    fn title(&self) -> String {
+    fn title(&self, _window: iced::window::Id) -> String {
+        self.title_text()
+    }
+
+    fn title_text(&self) -> String {
         // The state goes in the window title so a user with the window behind
         // something else can still read it from the taskbar.
         let state = match &self.state {
@@ -466,7 +552,7 @@ impl Moonlight {
         format!("{APP_NAME} · {state}")
     }
 
-    fn iced_theme(&self) -> iced::Theme {
+    fn iced_theme(&self, _window: iced::window::Id) -> iced::Theme {
         iced::Theme::Dark
     }
 
@@ -827,7 +913,7 @@ impl Moonlight {
                     // Setup replaces this very binary, so the app has to go —
                     // through the ordinary close, which puts the proxy back and
                     // stops the helper first.
-                    Ok(()) => return self.update(Message::CloseWindow),
+                    Ok(()) => return self.update(Message::Quit),
                 }
             }
             Message::UpdateChecked((status, restarting)) => {
@@ -844,7 +930,7 @@ impl Moonlight {
                     // not look hung.
                     return Task::perform(
                         tokio::time::sleep(Duration::from_millis(1200)),
-                        |()| Message::CloseWindow,
+                        |()| Message::Quit,
                     );
                 }
             }
@@ -871,14 +957,57 @@ impl Moonlight {
 
             // The window is undecorated, so moving, minimising, maximising and
             // closing it are all this app's job.
-            Message::DragWindow => return with_window(iced::window::drag),
+            Message::DragWindow => return self.on_main(iced::window::drag),
             Message::ResizeWindow(direction) => {
-                return with_window(move |id| iced::window::drag_resize(id, direction))
+                return self.on_main(move |id| iced::window::drag_resize(id, direction))
             }
-            Message::MinimiseWindow => return with_window(|id| iced::window::minimize(id, true)),
-            Message::MaximiseWindow => return with_window(iced::window::toggle_maximize),
+            Message::MinimiseWindow => return self.on_main(|id| iced::window::minimize(id, true)),
+            Message::MaximiseWindow => return self.on_main(iced::window::toggle_maximize),
+
+            Message::TrayClicked(click) => return self.toggle_tray(click),
+            Message::Request(request) => {
+                // Anything a second launch asks for starts with the window.
+                let _ = request;
+                return self.update(Message::OpenMain);
+            }
+            Message::WindowEvent(id, event) => return self.window_event(id, event),
+            Message::OpenMain => {
+                let close_tray = match (self.tray_window, self.tray_pinned) {
+                    (Some(id), false) => {
+                        self.tray_window = None;
+                        iced::window::close(id)
+                    }
+                    _ => Task::none(),
+                };
+                return Task::batch([close_tray, self.open_main()]);
+            }
+            Message::OpenPage(page) => {
+                self.page = page;
+                self.page_started = Some(Instant::now());
+                return self.update(Message::OpenMain);
+            }
+            Message::TogglePin => self.tray_pinned = !self.tray_pinned,
+            Message::TraySearch(value) => self.tray_search = value,
+            Message::SetRoutingMode(mode) => {
+                self.preferences.routing_mode = mode;
+                send(Command::SetRoutingMode(mode));
+            }
+            Message::PingNode(name) => send(Command::PingNode(name)),
+            Message::ToggleNotifications => {
+                self.preferences.notifications = !self.preferences.notifications;
+                self.save();
+                self.check_alerts();
+            }
             Message::CloseWindow => {
-                // Put the machine's proxy settings back before the window goes.
+                if !self.has_tray {
+                    return self.update(Message::Quit);
+                }
+                if let Some(id) = self.main_window.take() {
+                    return iced::window::close(id);
+                }
+            }
+            Message::Quit => {
+                // Put the machine's proxy settings back before the app goes.
                 // Closing without this leaves every browser pointed at a core
                 // that is about to exit.
                 //
@@ -894,7 +1023,13 @@ impl Moonlight {
                     |()| Message::ForceClose,
                 );
             }
-            Message::ForceClose => return with_window(iced::window::close),
+            // The backstop for a controller that never answered. Not
+            // `iced::exit()`: that still waits for the runtime, which is
+            // exactly what is stuck.
+            Message::ForceClose => {
+                moonlight_core::tray::remove();
+                std::process::exit(0);
+            }
 
             Message::Controller(event) => return self.apply(event),
             Message::Tick(_) => {
@@ -926,9 +1061,13 @@ impl Moonlight {
                     self.last_error = Some(localization::issue(issue, self.locale()));
                 }
                 self.state = state;
+                moonlight_core::tray::set_tooltip(&self.title_text());
             }
             Event::Nodes(nodes) => self.nodes = nodes,
-            Event::Info(info) => self.info = info,
+            Event::Info(info) => {
+                self.info = info;
+                self.check_alerts();
+            }
             Event::Source(source) => self.source = source,
             Event::Uptime(seconds) => self.uptime_seconds = seconds,
             Event::Rates { up, down } => self.rates = (up, down),
@@ -993,7 +1132,10 @@ impl Moonlight {
                     );
                 }
             }
-            Event::ShutdownComplete => return with_window(iced::window::close),
+            Event::ShutdownComplete => {
+                moonlight_core::tray::remove();
+                return iced::exit();
+            }
             Event::PreferencesChanged(preferences) => {
                 // The controller owns the parts of preferences it changes —
                 // latencies, the proxy snapshot — so its copy wins for those,
@@ -1003,19 +1145,184 @@ impl Moonlight {
                 let appearance = self.preferences.appearance.clone();
                 let locale = self.preferences.locale;
                 let dismissed = self.preferences.dismissed_announce.clone();
+                let notifications = self.preferences.notifications;
+                let sent_alerts = std::mem::take(&mut self.preferences.sent_alerts);
                 self.preferences = *preferences;
                 self.preferences.sidebar_collapsed = sidebar;
                 self.preferences.appearance = appearance;
                 self.preferences.locale = locale;
                 self.preferences.dismissed_announce = dismissed;
+                self.preferences.notifications = notifications;
+                self.preferences.sent_alerts = sent_alerts;
             }
         }
         Task::none()
     }
 
+    /// A window operation on the main window, if it is open.
+    fn on_main(&self, operation: impl FnOnce(iced::window::Id) -> Task<Message>) -> Task<Message> {
+        self.main_window.map_or_else(Task::none, operation)
+    }
+
+    /// Brings the main window forward, or opens a new one if it was closed.
+    fn open_main(&mut self) -> Task<Message> {
+        if let Some(id) = self.main_window {
+            return Task::batch([
+                iced::window::set_mode(id, iced::window::Mode::Windowed),
+                iced::window::gain_focus(id),
+            ]);
+        }
+        let (id, opened) = iced::window::open(iced::window::Settings {
+            size: iced::Size::new(1240.0, 820.0),
+            position: iced::window::Position::Centered,
+            decorations: false,
+            // Alt+F4 arrives as a request, and goes to the tray like the ×.
+            exit_on_close_request: false,
+            ..Default::default()
+        });
+        self.main_window = Some(id);
+        self.page_started = Some(Instant::now());
+        opened.map(|_| Message::Ignore)
+    }
+
+    /// Opens the tray panel above the click, or closes it.
+    fn toggle_tray(&mut self, click: moonlight_core::tray::Click) -> Task<Message> {
+        if let Some(id) = self.tray_window.take() {
+            return iced::window::close(id);
+        }
+        if self
+            .tray_blurred
+            .is_some_and(|at| at.elapsed() < Duration::from_millis(400))
+        {
+            return Task::none();
+        }
+        let (width, height) = (screens::tray::WIDTH, screens::tray::HEIGHT);
+        // Placed in physical pixels against the work area — beside the click,
+        // above a taskbar at the bottom or below one at the top — and handed
+        // to the window in logical ones.
+        let position = moonlight_core::tray::work_area().map(|(left, top, right, bottom, scale)| {
+            let (w, h, gap) = (width * scale, height * scale, 12.0 * scale);
+            let x = (click.x as f32 - w / 2.0).clamp(left as f32 + gap, right as f32 - w - gap);
+            let y = if (click.y - top) < (bottom - click.y) {
+                top as f32 + gap
+            } else {
+                bottom as f32 - h - gap
+            };
+            iced::Point::new(x / scale, y / scale)
+        });
+        let (id, opened) = iced::window::open(iced::window::Settings {
+            size: iced::Size::new(width, height),
+            position: position.map_or(iced::window::Position::Default, iced::window::Position::Specific),
+            decorations: false,
+            resizable: false,
+            level: iced::window::Level::AlwaysOnTop,
+            exit_on_close_request: false,
+            platform_specific: iced::window::settings::PlatformSpecific {
+                skip_taskbar: true,
+                ..Default::default()
+            },
+            ..Default::default()
+        });
+        self.tray_window = Some(id);
+        Task::batch([opened.map(|_| Message::Ignore), iced::window::gain_focus(id)])
+    }
+
+    fn window_event(&mut self, id: iced::window::Id, event: iced::window::Event) -> Task<Message> {
+        use iced::window::Event;
+        match event {
+            Event::CloseRequested if Some(id) == self.main_window => self.update(Message::CloseWindow),
+            Event::CloseRequested => iced::window::close(id),
+            // The panel goes when the user looks elsewhere, unless pinned.
+            Event::Unfocused if Some(id) == self.tray_window && !self.tray_pinned => {
+                self.tray_window = None;
+                self.tray_blurred = Some(Instant::now());
+                iced::window::close(id)
+            }
+            Event::Closed => {
+                if Some(id) == self.main_window {
+                    self.main_window = None;
+                }
+                if Some(id) == self.tray_window {
+                    self.tray_window = None;
+                }
+                Task::none()
+            }
+            _ => Task::none(),
+        }
+    }
+
+    /// Expiry and traffic warnings, each sent once, and only with the switch on.
+    ///
+    /// Warned three days out and each day after, once the plan has ended, when
+    /// less than a tenth of the quota is left, and when none is. A top-up makes
+    /// the next shortfall news again.
+    fn check_alerts(&mut self) {
+        if !self.preferences.notifications || self.preferences.subscription_url.is_none() {
+            return;
+        }
+        let locale = self.locale();
+        let info = &self.info;
+        let mut due: Vec<(String, S, String)> = Vec::new();
+
+        if let (Some(expire), Some(days)) = (info.expire, info.days_left()) {
+            if days == 0 {
+                due.push((
+                    format!("expired-{expire}"),
+                    S::NotifyExpiredTitle,
+                    t(S::NotifyExpiredBody, locale).to_string(),
+                ));
+            } else if days <= 3 {
+                due.push((
+                    format!("expiring-{expire}-{days}"),
+                    S::NotifyExpiringTitle,
+                    t(S::NotifyExpiringBody, locale)
+                        .replace("{days}", &moonlight_core::format::time_left(Some(expire), locale)),
+                ));
+            }
+        }
+        if let (Some(total), Some(used)) = (info.total.filter(|t| *t > 0), info.used()) {
+            let left = (total - used).max(0);
+            if left == 0 {
+                due.push((
+                    format!("traffic-out-{total}"),
+                    S::NotifyTrafficOutTitle,
+                    t(S::NotifyTrafficOutBody, locale).to_string(),
+                ));
+            } else if (left as f64) < total as f64 * 0.1 {
+                due.push((
+                    format!("traffic-low-{total}"),
+                    S::NotifyTrafficLowTitle,
+                    t(S::NotifyTrafficLowBody, locale)
+                        .replace("{left}", &moonlight_core::format::bytes(Some(left), locale))
+                        .replace("{total}", &moonlight_core::format::bytes(Some(total), locale)),
+                ));
+            } else {
+                // Topped up: the next time it runs low is a new warning.
+                self.preferences.sent_alerts.retain(|id| !id.starts_with("traffic-"));
+            }
+        }
+
+        let mut sent_any = false;
+        for (id, title, body) in due {
+            if self.preferences.sent_alerts.contains(&id) {
+                continue;
+            }
+            moonlight_core::tray::notify(t(title, locale), &body);
+            self.preferences.sent_alerts.push(id);
+            sent_any = true;
+        }
+        if sent_any {
+            let excess = self.preferences.sent_alerts.len().saturating_sub(40);
+            self.preferences.sent_alerts.drain(..excess);
+        }
+        self.save();
+    }
+
     fn subscription(&self) -> Subscription<Message> {
         let mut subscriptions = vec![
             Subscription::run(controller_events),
+            Subscription::run(outside_events),
+            iced::window::events().map(|(id, event)| Message::WindowEvent(id, event)),
             // The controller decides whether anything is due; this only asks.
             // A timer rather than a wake notification: after sleep the missed
             // tick fires at once, which is the catch-up a wake handler would do.
@@ -1043,7 +1350,14 @@ impl Moonlight {
         Subscription::batch(subscriptions)
     }
 
-    fn view(&self) -> Element<'_, Message> {
+    fn view(&self, window: iced::window::Id) -> Element<'_, Message> {
+        if Some(window) == self.tray_window {
+            return screens::tray::view(self);
+        }
+        self.main_view()
+    }
+
+    fn main_view(&self) -> Element<'_, Message> {
         let palette = self.palette();
         let locale = self.locale();
 
@@ -1160,6 +1474,24 @@ impl Moonlight {
     }
 }
 
+/// Tray clicks and second launches, taken once.
+type Outside = Mutex<Option<tokio::sync::mpsc::UnboundedReceiver<Message>>>;
+static OUTSIDE: OnceLock<Outside> = OnceLock::new();
+
+fn outside_events() -> impl iced::futures::Stream<Item = Message> {
+    let receiver = OUTSIDE
+        .get()
+        .and_then(|slot| slot.lock().ok().and_then(|mut slot| slot.take()));
+    iced::futures::stream::unfold(receiver, |mut receiver| async move {
+        let Some(rx) = receiver.as_mut() else {
+            std::future::pending::<()>().await;
+            unreachable!()
+        };
+        let message = rx.recv().await?;
+        Some((message, receiver))
+    })
+}
+
 /// The stream of controller events, taken once.
 fn controller_events() -> impl iced::futures::Stream<Item = Message> {
     let receiver = EVENTS
@@ -1179,18 +1511,6 @@ fn controller_events() -> impl iced::futures::Stream<Item = Message> {
     })
 }
 
-/// Runs a window operation against whichever window is current.
-///
-/// `window::latest()` answers with an `Option`, because a task can outlive the
-/// window it was queued for. There is exactly one window here, so `None` means
-/// it has already gone and the operation is simply dropped.
-fn with_window(
-    // `Fn`, not `FnOnce`: `and_then` may call it per item, and there is no way
-    // to move a captured `FnOnce` out of that closure.
-    operation: impl Fn(iced::window::Id) -> Task<Message> + Send + Sync + 'static,
-) -> Task<Message> {
-    iced::window::latest().and_then(operation)
-}
 
 fn send(command: Command) {
     if let Some(sender) = COMMANDS.get() {
@@ -1619,6 +1939,12 @@ impl Moonlight {
     }
     pub fn refresh_note(&self) -> Option<(u64, &Result<(), Issue>)> {
         self.refresh_note.as_ref().map(|(id, outcome)| (*id, outcome))
+    }
+    pub fn tray_pinned(&self) -> bool {
+        self.tray_pinned
+    }
+    pub fn tray_search(&self) -> &str {
+        &self.tray_search
     }
     /// The service's announcement, unless the user has put this one away.
     pub fn announce(&self) -> Option<&str> {
@@ -2059,9 +2385,9 @@ mod tests {
     #[test]
     fn the_window_title_carries_the_connection_state() {
         let mut app = app();
-        assert!(app.title().contains(t(S::StateDisconnected, AppLocale::Ru)));
+        assert!(app.title_text().contains(t(S::StateDisconnected, AppLocale::Ru)));
         app.state = ConnectionState::Connected;
-        assert!(app.title().contains(t(S::StateConnected, AppLocale::Ru)));
+        assert!(app.title_text().contains(t(S::StateConnected, AppLocale::Ru)));
     }
 
     /// Builds every screen's widget tree.
@@ -2124,7 +2450,7 @@ mod tests {
             ] {
                 app.page = page;
                 // Dropped immediately; building it is the assertion.
-                let _ = app.view();
+                let _ = app.main_view();
             }
         }
     }
@@ -2147,8 +2473,11 @@ mod tests {
             Page::Connections,
         ] {
             app.page = page;
-            let _ = app.view();
+            let _ = app.main_view();
         }
+        // And the tray panel, with a search that matches nothing.
+        app.tray_search = "zzz".into();
+        let _ = screens::tray::view(&app);
     }
 
     #[test]

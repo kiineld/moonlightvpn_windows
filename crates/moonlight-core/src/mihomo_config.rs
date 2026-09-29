@@ -41,6 +41,7 @@ pub struct Overrides {
     /// hand-written ones alike.
     pub split_rules: Vec<SplitRule>,
     pub log_level: String,
+    pub routing_mode: crate::models::RoutingMode,
 }
 
 impl Default for Overrides {
@@ -53,6 +54,7 @@ impl Default for Overrides {
             split_mode: SplitMode::All,
             split_rules: Vec::new(),
             log_level: "warning".to_string(),
+            routing_mode: Default::default(),
         }
     }
 }
@@ -95,7 +97,7 @@ pub fn build(panel_yaml: &str, overrides: &Overrides) -> Result<String, Failure>
     );
     root.insert(key("secret"), Value::from(overrides.secret.clone()));
     root.insert(key("log-level"), Value::from(overrides.log_level.clone()));
-    root.insert(key("mode"), Value::from("rule"));
+    root.insert(key("mode"), Value::from(overrides.routing_mode.as_str()));
     root.insert(key("allow-lan"), Value::from(false));
     root.insert(key("bind-address"), Value::from("127.0.0.1"));
 
@@ -404,6 +406,25 @@ pub fn dns_block(existing: Option<Mapping>) -> Mapping {
 /// its position in `proxies:`, and a group is ranked by the first member it
 /// covers — resolved through the group's explicit list, or through the `filter`
 /// an `include-all` group selects its members with.
+/// The service's notes on its servers and groups, by name: `serverDescription`
+/// on a proxy, `description` on a group.
+pub fn server_descriptions(yaml: &str) -> std::collections::HashMap<String, String> {
+    let mut descriptions = std::collections::HashMap::new();
+    let Ok(root) = serde_yaml::from_str::<Value>(yaml) else {
+        return descriptions;
+    };
+    for (section, field) in [("proxies", "serverDescription"), ("proxy-groups", "description")] {
+        for entry in root.get(section).and_then(Value::as_sequence).into_iter().flatten() {
+            let name = entry.get("name").and_then(Value::as_str);
+            let text = entry.get(field).and_then(Value::as_str).map(str::trim);
+            if let (Some(name), Some(text)) = (name, text.filter(|t| !t.is_empty())) {
+                descriptions.insert(name.to_string(), text.to_string());
+            }
+        }
+    }
+    descriptions
+}
+
 pub fn panel_order(yaml: &str) -> std::collections::HashMap<String, usize> {
     let mut order = std::collections::HashMap::new();
     let Ok(document) = serde_yaml::from_str::<Value>(yaml) else {
@@ -897,5 +918,28 @@ rules:
         let root = parse(&built);
         assert!(root.contains_key(key("sub-rules")));
         assert_eq!(rules_of(&root).len(), 3);
+    }
+
+    #[test]
+    fn the_services_notes_are_read_from_proxies_and_groups() {
+        let yaml = "proxies:\n  - {name: Poland LTE 1, type: vless, serverDescription: ' Доступность во время БС 🌟 '}\n  - {name: Plain, type: vless}\nproxy-groups:\n  - {name: Auto, type: url-test, description: Лучший, proxies: [Plain]}\n";
+        let notes = server_descriptions(yaml);
+        assert_eq!(notes.get("Poland LTE 1").map(String::as_str), Some("Доступность во время БС 🌟"));
+        assert_eq!(notes.get("Auto").map(String::as_str), Some("Лучший"));
+        assert!(!notes.contains_key("Plain"));
+    }
+
+    #[test]
+    fn the_routing_mode_is_written_as_the_cores_own_mode() {
+        let config = build(
+            "proxies:\n  - {name: A, type: ss, server: a.example, port: 1, cipher: aes-128-gcm, password: x}\n",
+            &Overrides {
+                routing_mode: crate::models::RoutingMode::Global,
+                ..Overrides::default()
+            },
+        )
+        .expect("builds");
+        let value: Value = serde_yaml::from_str(&config).expect("yaml");
+        assert_eq!(value.get("mode").and_then(Value::as_str), Some("global"));
     }
 }

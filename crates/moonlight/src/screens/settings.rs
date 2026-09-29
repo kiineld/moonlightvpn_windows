@@ -202,6 +202,17 @@ fn system(app: &Moonlight) -> Element<'_, Message> {
             palette,
         ),
         components::divider(palette),
+        components::setting_row(
+            t(S::Notifications, locale).to_string(),
+            Some(t(S::NotificationsNote, locale).to_string()),
+            components::toggle(
+                app.preferences().notifications,
+                Message::ToggleNotifications,
+                palette,
+            ),
+            palette,
+        ),
+        components::divider(palette),
         auto_update(app),
     ];
 

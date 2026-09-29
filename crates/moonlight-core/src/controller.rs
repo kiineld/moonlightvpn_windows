@@ -36,7 +36,7 @@ use tokio::sync::{mpsc, Mutex};
 use crate::api::{Connection, LogLine, MihomoApi, Traffic};
 use crate::helper::{self, Request, Response};
 use crate::issue::Issue;
-use crate::models::{ConnectionState, Node, SplitMode, SubscriptionInfo, TunnelMode};
+use crate::models::{ConnectionState, Node, RoutingMode, SplitMode, SubscriptionInfo, TunnelMode};
 use crate::preferences::{self, Preferences};
 use crate::process::MihomoProcess;
 use crate::redact::{self, Redactions};
@@ -73,6 +73,10 @@ pub enum Command {
     SetAutoUpdate(u32),
     /// Measure every node.
     Ping,
+    /// Measure one.
+    PingNode(String),
+    /// Rules, global or direct — patched into the running core at once.
+    SetRoutingMode(RoutingMode),
     ImportSubscription(String),
     RemoveSubscription,
     SetMode(TunnelMode),
@@ -267,6 +271,8 @@ impl Controller {
         self.preferences.sidebar_collapsed = on_disk.sidebar_collapsed;
         self.preferences.launch_at_login = on_disk.launch_at_login;
         self.preferences.dismissed_announce = on_disk.dismissed_announce;
+        self.preferences.notifications = on_disk.notifications;
+        self.preferences.sent_alerts = on_disk.sent_alerts;
         let _ = self.preferences.save();
         self.emit(Event::PreferencesChanged(Box::new(
             self.preferences.clone(),
@@ -292,6 +298,8 @@ impl Controller {
                     self.save();
                 }
                 Command::Ping => self.ping().await,
+                Command::PingNode(name) => self.ping_node(name).await,
+                Command::SetRoutingMode(mode) => self.set_routing_mode(mode).await,
                 Command::ImportSubscription(url) => self.import(url).await,
                 Command::RemoveSubscription => self.remove_subscription().await,
                 Command::SetMode(mode) => self.set_mode(mode).await,
@@ -622,6 +630,7 @@ impl Controller {
             split_mode: self.preferences.split_mode,
             split_rules: self.active_split_rules(),
             log_level: "info".to_string(),
+            routing_mode: self.preferences.routing_mode,
         };
         match mihomo_config::build(panel, &overrides) {
             Ok(config) => Some(config),
@@ -681,12 +690,21 @@ impl Controller {
             })
             .unwrap_or_default();
         self.selector = mihomo_config::primary_selector_name(&group_values, &rules);
+        // Global mode sends everything through mihomo's own GLOBAL group,
+        // which knows nothing of this selector unless pointed at it — the
+        // user's choice would otherwise be ignored the moment they switch.
+        let _ = self.api.select(&self.selector, "GLOBAL").await;
 
         let mut nodes = self.api.nodes(&self.selector).await.unwrap_or_default();
 
         // The panel's own transport labels come from the subscription document,
         // which knows more than the API's bare type.
         let labels = self.protocol_labels();
+        let descriptions = self
+            .panel_yaml
+            .as_deref()
+            .map(mihomo_config::server_descriptions)
+            .unwrap_or_default();
         for node in &mut nodes {
             if node.latency.is_none() {
                 node.latency = self.preferences.latency(&node.name);
@@ -697,6 +715,7 @@ impl Controller {
                 || self.probed.contains(&node.name)
                 || self.preferences.unreachable.contains(&node.name);
             node.protocol_label = labels.get(&node.name).cloned();
+            node.description = descriptions.get(&node.name).cloned();
         }
 
         // Back into the panel's own order. mihomo returns a selector's members
@@ -1062,6 +1081,40 @@ impl Controller {
         self.save();
         self.pinging = false;
         self.emit(Event::PingFinished);
+    }
+
+    /// Measures one node, as the tray's per-row button asks.
+    async fn ping_node(&mut self, name: String) {
+        self.emit(Event::PingStarted(vec![name.clone()]));
+        let ms = self.api.delay(&name, crate::api::PROBE_TIMEOUT_MS).await;
+        self.probed.insert(name.clone());
+        self.preferences.record_latency(&name, ms);
+        self.save();
+        self.emit(Event::Latency { node: name, ms });
+        self.emit(Event::PingFinished);
+    }
+
+    /// Switches the running core at once; the next config it is built with
+    /// carries the choice too.
+    async fn set_routing_mode(&mut self, mode: RoutingMode) {
+        if self.preferences.routing_mode == mode {
+            return;
+        }
+        self.preferences.routing_mode = mode;
+        self.save();
+        let patch = serde_json::json!({ "mode": mode.as_str() });
+        match self.api.patch_config(patch).await {
+            Ok(()) => {
+                self.narrate("INFO", format!("Routing mode: {}", mode.as_str()));
+                // Connections already open keep the route they started on.
+                // Closed, programs reopen them, and the new mode takes them.
+                if self.state.is_connected() {
+                    let _ = self.api.close_all_connections().await;
+                }
+            }
+            // No core answering: the next one is built with the mode anyway.
+            Err(error) => self.narrate("WARNING", format!("Could not switch routing mode: {error}")),
+        }
     }
 
     async fn import(&mut self, url: String) {

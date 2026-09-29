@@ -285,8 +285,15 @@ mod client {
                 }
                 Err(error) => {
                     // ERROR_PIPE_BUSY means the service is up but serving
-                    // another caller; anything else means it is not listening.
-                    if std::time::Instant::now() >= deadline {
+                    // another caller, and a running service may not have
+                    // opened its pipe yet; both are worth waiting for. A
+                    // service that is not running will not answer however long
+                    // this waits — and quitting on every machine without the
+                    // helper used to sit here for the whole timeout.
+                    const ERROR_PIPE_BUSY: i32 = 231;
+                    let worth_waiting =
+                        error.raw_os_error() == Some(ERROR_PIPE_BUSY) || is_running();
+                    if !worth_waiting || std::time::Instant::now() >= deadline {
                         return Err(format!("The Moonlight helper is not running: {error}"));
                     }
                     std::thread::sleep(Duration::from_millis(100));

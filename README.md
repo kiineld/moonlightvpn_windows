@@ -180,6 +180,25 @@ The core also runs with `CREATE_NO_WINDOW`: mihomo is a console application, and
 spawning it normally puts a `conhost` window in front of the user for the life
 of the tunnel.
 
+### The tray, one copy, and closing
+
+The app is an iced *daemon*: it outlives its window. Closing the window (the ×
+or Alt+F4) leaves it in the notification area; quitting is the tray panel's
+own button, and goes through the same shutdown that puts the proxy settings
+back. The icon is raw `Shell_NotifyIcon` on a message-only window (`tray.rs`);
+its balloons carry the expiry and low-traffic warnings, each sent once and only
+with the switch on. A click opens the tray panel — state and speeds, rules /
+global / direct (patched into the running core; global points mihomo's
+`GLOBAL` at the app's selector), a searchable server list with a ping per row,
+and a connect button — which closes when it loses focus unless pinned.
+
+Only one copy runs (`instance.rs`): a named mutex marks the first, and a second
+launch passes its request — show the window, or a link — down a per-user pipe
+and exits before touching anything. A second copy used to find the first one's
+core, take it for a leftover and stop it. A sign-in launch carries
+`--autostart` and starts in the tray; the Run entry is rewritten at launch so an
+older one gains the flag.
+
 ### When TUN cannot start
 
 `auto-route` installs routes covering the internet, and another VPN client
@@ -534,8 +553,7 @@ An honest list, not a roadmap.
   subscription exists; this one collapses to a single "Добавить подписку" row.
   Everything else — the rail, the dial, Приложения, Соединения, Настройки — has
   been matched against that client screen by screen on real hardware.
-- Minimise-to-tray and connect-on-launch are specified by the composition and are
-  **not** implemented, so the СИСТЕМА group carries one switch rather than three.
+- Connect-on-launch is specified by the composition and is **not** implemented.
   A switch that flips and changes nothing is worse than an absent one.
 - Соединения has no search field yet; the macOS client filters the list from one.
 - **The app is unsigned,** so SmartScreen warns on first run. That needs a
@@ -545,8 +563,6 @@ An honest list, not a roadmap.
   is one secret away. An EV certificate clears SmartScreen immediately; an OV one
   only once the binary has built reputation.
 - Reconnect-on-network-change is not implemented.
-- There is no tray icon, and closing the window quits rather than minimising to
-  one.
 - `moonlight://` is not registered as a URL scheme, so a subscription link from
   the bot cannot open the app directly.
 

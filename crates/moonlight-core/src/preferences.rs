@@ -27,7 +27,7 @@ use std::path::PathBuf;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::models::{AppLocale, SplitMode, SubscriptionInfo, TunnelMode};
+use crate::models::{AppLocale, RoutingMode, SplitMode, SubscriptionInfo, TunnelMode};
 use crate::split_rule::SplitRule;
 use crate::system_proxy::Snapshot;
 
@@ -42,6 +42,8 @@ pub struct Preferences {
     pub selected_node: Option<String>,
     pub auto_select: bool,
     pub mode: TunnelMode,
+    /// Rules, everything through the server, or nothing — see [`RoutingMode`].
+    pub routing_mode: RoutingMode,
     pub split_mode: SplitMode,
     pub split_rules: Vec<SplitRule>,
     /// Node name → last measured latency in milliseconds.
@@ -74,6 +76,11 @@ pub struct Preferences {
     /// The announcement the user put away. Per message: the next one is news by
     /// definition, and shows again.
     pub dismissed_announce: Option<String>,
+    /// Expiry and low-traffic warnings, sent through the tray.
+    pub notifications: bool,
+    /// Which warnings have gone out, so each is sent once — see the alerts in
+    /// the app.
+    pub sent_alerts: Vec<String>,
 }
 
 /// The auto-update intervals on offer, in hours; 0 is off.
@@ -110,6 +117,7 @@ impl Default for Preferences {
             selected_node: None,
             auto_select: true,
             mode: TunnelMode::SystemProxy,
+            routing_mode: RoutingMode::Rule,
             split_mode: SplitMode::All,
             split_rules: Vec::new(),
             latencies: HashMap::new(),
@@ -126,6 +134,8 @@ impl Default for Preferences {
             last_refresh: None,
             cached_info: None,
             dismissed_announce: None,
+            notifications: true,
+            sent_alerts: Vec::new(),
         }
     }
 }

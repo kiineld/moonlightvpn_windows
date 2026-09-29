@@ -16,3 +16,4 @@ pub mod settings;
 pub mod sidebar;
 pub mod subscription;
 pub mod titlebar;
+pub mod tray;

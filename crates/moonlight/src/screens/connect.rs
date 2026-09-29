@@ -514,15 +514,13 @@ fn auto_row(app: &Moonlight) -> Element<'_, Message> {
         .into()
 }
 
-fn node_row<'a>(app: &'a Moonlight, node: &'a Node, selected: bool) -> Element<'a, Message> {
-    let palette = app.palette_of();
-    let locale = app.locale_of();
-
-    // A picture, not the emoji. Windows renders a regional-indicator pair as the
-    // two letters it is built from — 🇩🇪 comes out as "DE" — and no system font
-    // on the platform can draw these, so the list read as a column of country
-    // codes.
-    let flag: Element<'a, Message> = match node.region_code().and_then(|c| app.flag_image(&c)) {
+/// A node's flag.
+///
+/// A picture, not the emoji. Windows renders a regional-indicator pair as the
+/// two letters it is built from — 🇩🇪 comes out as "DE" — and no system font on
+/// the platform can draw these, so the list read as a column of country codes.
+pub fn flag<'a>(app: &'a Moonlight, node: &'a Node) -> Element<'a, Message> {
+    match node.region_code().and_then(|c| app.flag_image(&c)) {
         Some(handle) => container(
             iced::widget::image(handle)
                 .width(Length::Fixed(24.0))
@@ -532,11 +530,18 @@ fn node_row<'a>(app: &'a Moonlight, node: &'a Node, selected: bool) -> Element<'
         .into(),
         // A cross-country balancer has no flag, and inventing one would be a lie
         // about where the traffic goes.
-        None => container(icon(Icon::Globe, 18.0, palette.text_muted))
+        None => container(icon(Icon::Globe, 18.0, app.palette_of().text_muted))
             .width(Length::Fixed(24.0))
             .center_x(Length::Fixed(24.0))
             .into(),
-    };
+    }
+}
+
+fn node_row<'a>(app: &'a Moonlight, node: &'a Node, selected: bool) -> Element<'a, Message> {
+    let palette = app.palette_of();
+    let locale = app.locale_of();
+
+    let flag = flag(app, node);
 
     // A node still being measured shows a spinner rather than its old number,
     // so a stale figure is never mistaken for a fresh one.
