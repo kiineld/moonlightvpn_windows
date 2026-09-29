@@ -574,7 +574,9 @@ impl Controller {
             }
             // A stored number counts as probed: it came from a real probe, just
             // an earlier one.
-            node.probed = node.latency.is_some() || self.probed.contains(&node.name);
+            node.probed |= node.latency.is_some()
+                || self.probed.contains(&node.name)
+                || self.preferences.unreachable.contains(&node.name);
             node.protocol_label = labels.get(&node.name).cloned();
         }
 
@@ -597,6 +599,15 @@ impl Controller {
 
         let live: Vec<String> = nodes.iter().map(|n| n.name.clone()).collect();
         self.preferences.prune_latencies(&live);
+        // A server chosen under an earlier subscription and gone from this one
+        // would leave the picker pointing at nothing, so it falls back to
+        // automatic. An empty list is a core that did not answer, not a
+        // subscription without servers, and changes nothing.
+        let gone = |chosen: &String| !live.is_empty() && !live.contains(chosen);
+        if self.preferences.selected_node.as_ref().is_some_and(gone) {
+            self.preferences.selected_node = None;
+            self.preferences.auto_select = true;
+        }
         self.save();
         cache_nodes(&nodes);
 
@@ -911,23 +922,13 @@ impl Controller {
         // Everything asked has now been asked, answer or not — which is what
         // lets the UI say `n/a` for a silent node and a dash for one that has
         // simply not been measured yet.
+        // A node that did not answer loses its number and is remembered as
+        // silent, so the next launch says `n/a` rather than a dash.
+        for node in &names {
+            self.preferences
+                .record_latency(node, results.get(node).copied());
+        }
         self.probed.extend(names);
-        for (node, ms) in &results {
-            self.preferences.record_latency(node, Some(*ms));
-        }
-        // A node that did not answer loses its number rather than keeping a
-        // stale one that is no longer true.
-        let answered: Vec<&String> = results.keys().collect();
-        let stale: Vec<String> = self
-            .preferences
-            .latencies
-            .keys()
-            .filter(|k| !answered.contains(k))
-            .cloned()
-            .collect();
-        for node in stale {
-            self.preferences.record_latency(&node, None);
-        }
 
         self.save();
         self.pinging = false;

@@ -1,6 +1,6 @@
 # Moonlight VPN — Windows
 
-A Rust client built on **[mihomo](https://github.com/MetaCubeX/mihomo) 1.19.29**,
+A Rust client built on **[mihomo](https://github.com/MetaCubeX/mihomo) 1.19.31**,
 implementing the `Moonlight Desktop` design. Subscriptions come from a Remnawave
 panel. Companion to [moonlightvpn_macos](https://github.com/kiineld/moonlightvpn_macos),
 which is the same product in SwiftUI, and to

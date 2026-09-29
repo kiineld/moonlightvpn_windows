@@ -21,7 +21,7 @@
 //! presents to the user as "the internet stopped working" with nothing on screen
 //! to connect it to this app.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
@@ -46,6 +46,10 @@ pub struct Preferences {
     pub split_rules: Vec<SplitRule>,
     /// Node name → last measured latency in milliseconds.
     pub latencies: HashMap<String, u32>,
+    /// Nodes whose last probe got no answer. Kept apart from `latencies` so a
+    /// relaunch still says `n/a` for them rather than the dash of a node never
+    /// asked.
+    pub unreachable: HashSet<String>,
     pub locale: AppLocale,
     /// `None` follows the system setting.
     pub appearance: Option<String>,
@@ -71,6 +75,7 @@ impl Default for Preferences {
             split_mode: SplitMode::All,
             split_rules: Vec::new(),
             latencies: HashMap::new(),
+            unreachable: HashSet::new(),
             locale: AppLocale::Ru,
             appearance: None,
             sidebar_collapsed: false,
@@ -159,11 +164,13 @@ impl Preferences {
         match latency {
             Some(value) => {
                 self.latencies.insert(node.to_string(), value);
+                self.unreachable.remove(node);
             }
             // A node that stopped answering must lose its old number rather
             // than keep showing a stale one that is no longer true.
             None => {
                 self.latencies.remove(node);
+                self.unreachable.insert(node.to_string());
             }
         }
     }
@@ -172,6 +179,7 @@ impl Preferences {
     /// does not grow forever across subscription changes.
     pub fn prune_latencies(&mut self, live_nodes: &[String]) {
         self.latencies.retain(|name, _| live_nodes.contains(name));
+        self.unreachable.retain(|name| live_nodes.contains(name));
     }
 
     /// The rules the app-list toggles contribute, keyed by executable.
@@ -288,6 +296,14 @@ mod tests {
             None,
             "a timeout must not leave the old figure on screen"
         );
+
+        // …and is remembered as silent across a relaunch, so it reads `n/a`
+        // rather than the dash of a node never asked — until it answers again.
+        let json = serde_json::to_string(&prefs).expect("serialises");
+        let mut back: Preferences = serde_json::from_str(&json).expect("deserialises");
+        assert!(back.unreachable.contains("Node A"));
+        back.record_latency("Node A", Some(40));
+        assert!(!back.unreachable.contains("Node A"));
     }
 
     #[test]

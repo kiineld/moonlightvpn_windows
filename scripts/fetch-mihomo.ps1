@@ -35,14 +35,23 @@ function Get-Remote($url, $out) {
 Set-Location (Join-Path $PSScriptRoot '..')
 New-Item -ItemType Directory -Force -Path resources\mihomo | Out-Null
 
-$mihomoVersion = 'v1.19.29'
+# 1.19.30 is the floor: the service's "Poland LTE" rows are balancers over
+# XHTTP servers whose padding and placement options older cores cannot read,
+# so every probe to them fails.
+$mihomoVersion = 'v1.19.31'
 $wintunVersion = '0.14.1'
 
-if (-not (Test-Path resources\mihomo\mihomo.exe)) {
+# Re-fetched when the pinned version moves, not only when the file is missing,
+# or a bump never reaches a checkout that already has an older core.
+$haveVersion = if (Test-Path resources\mihomo\VERSION) { (Get-Content resources\mihomo\VERSION -Raw).Trim() } else { '' }
+if (-not (Test-Path resources\mihomo\mihomo.exe) -or $haveVersion -ne $mihomoVersion) {
     $name = "mihomo-windows-amd64-$mihomoVersion.zip"
     $url  = "https://github.com/MetaCubeX/mihomo/releases/download/$mihomoVersion/$name"
     Write-Host "fetching $name"
     Get-Remote $url "$env:TEMP\$name"
+    # Emptied first: the copy below takes the first .exe it finds, which could
+    # otherwise be an older core unpacked here by an earlier run.
+    Remove-Item -Recurse -Force "$env:TEMP\mihomo" -ErrorAction SilentlyContinue
     Expand-Archive -Path "$env:TEMP\$name" -DestinationPath "$env:TEMP\mihomo" -Force
     Get-ChildItem "$env:TEMP\mihomo" -Filter *.exe -Recurse |
         Select-Object -First 1 |

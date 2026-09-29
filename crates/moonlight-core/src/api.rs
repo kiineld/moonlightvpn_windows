@@ -188,9 +188,13 @@ impl MihomoApi {
                 let latency = last_history_delay(entry);
                 Some(Node {
                     name: name.to_string(),
-                    // The core's own history is a completed probe, so a number
-                    // read back from it counts as measured.
-                    probed: latency.is_some(),
+                    // The core's own history is a completed probe, so an entry
+                    // counts as measured — a zero in it is a timeout, `n/a`,
+                    // not a node nobody has asked yet.
+                    probed: entry
+                        .get("history")
+                        .and_then(Value::as_array)
+                        .is_some_and(|history| !history.is_empty()),
                     latency,
                     is_group: GROUP_TYPES.contains(&kind.to_lowercase().as_str()),
                     kind,
@@ -266,7 +270,7 @@ impl MihomoApi {
             let api = Arc::clone(self);
             let sink = sink.clone();
             async move {
-                let delay = api.delay(&node, 3_000).await;
+                let delay = api.delay(&node, PROBE_TIMEOUT_MS).await;
                 // Ignore a closed receiver: the user changing screens mid-pass
                 // drops it, and that is not a reason to stop measuring.
                 let _ = sink.send((node.clone(), delay));
@@ -460,6 +464,10 @@ impl MihomoApi {
         Ok(serde_json::from_str(&text).unwrap_or_else(|_| Value::Object(Default::default())))
     }
 }
+
+/// How long a probe waits before the node reads as `n/a`. 3000 ms gave up on
+/// servers that were merely slow — the LTE balancers among them.
+const PROBE_TIMEOUT_MS: u32 = 5_000;
 
 /// `history` is the core's own record of past delay probes; its last entry is
 /// what the UI shows until a fresh probe replaces it.

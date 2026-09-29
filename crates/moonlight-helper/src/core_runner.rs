@@ -77,6 +77,7 @@ impl Core {
 
     pub fn start(&mut self, config: &str) -> Result<(), String> {
         self.stop();
+        refresh_core();
 
         let binary = core_binary();
         if !binary.is_file() {
@@ -108,6 +109,34 @@ impl Core {
         if let Some(mut child) = self.child.take() {
             let _ = child.kill();
             let _ = child.wait();
+        }
+    }
+}
+
+/// Brings the staged core level with the one shipped beside this helper.
+///
+/// Only `--install` used to copy it, and only the installer runs that. An update
+/// from the zip replaced the app, the helper and the core beside them, and left
+/// TUN running the old core from here — on 1.19.29, every probe to the service's
+/// LTE balancers fails. Copying from the helper's own directory adds no trust:
+/// whoever can write there can already replace the service binary itself.
+///
+/// Called with the core stopped, so neither file is held open.
+fn refresh_core() {
+    let Some(source) = std::env::current_exe()
+        .ok()
+        .and_then(|exe| exe.parent().map(PathBuf::from))
+    else {
+        return;
+    };
+    for name in ["mihomo.exe", "wintun.dll"] {
+        // A development build has no core beside it; nothing to compare with.
+        let Ok(shipped) = std::fs::read(source.join(name)) else {
+            continue;
+        };
+        let staged = PathBuf::from(INSTALL_ROOT).join(name);
+        if std::fs::read(&staged).ok().as_deref() != Some(shipped.as_slice()) {
+            let _ = std::fs::write(&staged, &shipped);
         }
     }
 }

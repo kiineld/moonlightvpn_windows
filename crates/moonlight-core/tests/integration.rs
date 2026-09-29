@@ -15,7 +15,7 @@
 //! - `MOONLIGHT_ADMIN_TESTS=1` opts in to the ones that install a service.
 //!   They are off by default because they change machine state.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use moonlight_core::mihomo_config::{self, Overrides};
@@ -73,6 +73,13 @@ fn validate(config: &str, label: &str) -> Result<(), String> {
     };
     let directory = std::env::temp_dir().join(format!("moonlight-test-{label}"));
     let _ = std::fs::create_dir_all(&directory);
+    // Seeded from the build's own copy when there is one, so a GEOSITE rule
+    // tests the grammar rather than whether this network can reach GitHub
+    // through the config's resolver.
+    let geodata = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../resources/geodata");
+    for name in ["GeoSite.dat", "geoip.metadb"] {
+        let _ = std::fs::copy(geodata.join(name), directory.join(name));
+    }
     let path = directory.join("config.yaml");
     std::fs::write(&path, config).expect("the temporary directory is writable");
 
