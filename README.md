@@ -327,6 +327,18 @@ languages — never "Panel returned HTTP 502". The log masks the subscription
 link, its host and token, and every server address (`redact.rs`), in the app's
 lines and the core's alike, and transport errors are logged without their URL.
 
+### `moonlight://` links
+
+`moonlight://install-config?url=<link>` — the form Clash clients use — and
+`moonlight://import?url=…` / `moonlight:///import?url=…` add a subscription
+(`deeplink.rs`). The nested link should be percent-encoded; one that is not is
+still read to the end, `&` and all, and only http(s) links are taken. The scheme
+is registered under `HKCU\Software\Classes\moonlight` at every launch, so it
+follows the app wherever it lives. A link Windows opens starts a second copy,
+which hands it to the running one and exits. A link never adds anything by
+itself: the app comes forward and asks, saying whether it would replace or
+update the current subscription, and never shows the link.
+
 ### The subscription client ignores the system proxy
 
 `reqwest` is built with `no_proxy`, and that does more work here than the
@@ -563,8 +575,6 @@ An honest list, not a roadmap.
   is one secret away. An EV certificate clears SmartScreen immediately; an OV one
   only once the binary has built reputation.
 - Reconnect-on-network-change is not implemented.
-- `moonlight://` is not registered as a URL scheme, so a subscription link from
-  the bot cannot open the app directly.
 
 ## Licence
 

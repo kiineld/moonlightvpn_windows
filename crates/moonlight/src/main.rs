@@ -202,6 +202,28 @@ impl Page {
     }
 }
 
+/// Where the question a `moonlight://` link asks has got to.
+#[derive(Debug, Clone, PartialEq)]
+pub enum LinkPrompt {
+    /// Asking whether to add this subscription.
+    Ask(String),
+    /// Adding it.
+    Adding(String),
+    /// It did not load, and why.
+    Failed(String, Issue),
+    /// The link carried nothing this app can add.
+    Invalid,
+}
+
+impl LinkPrompt {
+    fn for_link(link: &str) -> LinkPrompt {
+        match moonlight_core::deeplink::subscription_to_add(link) {
+            Some(subscription) => LinkPrompt::Ask(subscription),
+            None => LinkPrompt::Invalid,
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub enum Message {
     Navigate(Page),
@@ -242,6 +264,9 @@ pub enum Message {
     ToggleNotifications,
     /// Leave: put the machine back, then exit.
     Quit,
+    /// Add the subscription the link carried — or try again.
+    LinkAdd,
+    LinkDismiss,
 
     ImportChanged(String),
     ImportSubmit,
@@ -403,6 +428,8 @@ pub struct Moonlight {
     /// icon takes focus from the panel first, so without this the click that
     /// meant "close" closed it and then opened it again.
     tray_blurred: Option<Instant>,
+    /// A `moonlight://` link's question, while it is on screen.
+    link_prompt: Option<LinkPrompt>,
 }
 
 impl Moonlight {
@@ -412,6 +439,8 @@ impl Moonlight {
         // removed the entry with msconfig while the app was shut must not come
         // back to a switch that still reads "on".
         preferences.launch_at_login = moonlight_core::autostart::is_enabled();
+        // So a link from the bot opens this copy, wherever it now lives.
+        moonlight_core::deeplink::register();
         // Rewritten so an entry from an older version, or one pointing at a
         // copy that has since moved, carries this executable and its flag.
         if preferences.launch_at_login {
@@ -453,7 +482,13 @@ impl Moonlight {
 
         // A sign-in launch starts in the tray, as the setting promises — unless
         // there is no tray to start in.
-        let at_sign_in = std::env::args().any(|a| a == moonlight_core::autostart::AUTOSTART_FLAG);
+        // Started by a link: it asks as soon as the window is up.
+        app.link_prompt = std::env::args()
+            .nth(1)
+            .filter(|arg| moonlight_core::deeplink::is_link(arg))
+            .map(|link| LinkPrompt::for_link(&link));
+        let at_sign_in = app.link_prompt.is_none()
+            && std::env::args().any(|a| a == moonlight_core::autostart::AUTOSTART_FLAG);
         let window = if at_sign_in && app.has_tray {
             Task::none()
         } else {
@@ -532,6 +567,7 @@ impl Moonlight {
             tray_pinned: false,
             tray_search: String::new(),
             tray_blurred: None,
+            link_prompt: None,
         }
     }
 
@@ -966,10 +1002,22 @@ impl Moonlight {
 
             Message::TrayClicked(click) => return self.toggle_tray(click),
             Message::Request(request) => {
-                // Anything a second launch asks for starts with the window.
-                let _ = request;
+                // A link asks its question in the window; anything else a
+                // second launch wants is the window itself.
+                if moonlight_core::deeplink::is_link(&request) {
+                    self.link_prompt = Some(LinkPrompt::for_link(&request));
+                }
                 return self.update(Message::OpenMain);
             }
+            Message::LinkAdd => {
+                if let Some(LinkPrompt::Ask(link) | LinkPrompt::Failed(link, _)) =
+                    self.link_prompt.clone()
+                {
+                    send(Command::ImportSubscription(link.clone()));
+                    self.link_prompt = Some(LinkPrompt::Adding(link));
+                }
+            }
+            Message::LinkDismiss => self.link_prompt = None,
             Message::WindowEvent(id, event) => return self.window_event(id, event),
             Message::OpenMain => {
                 let close_tray = match (self.tray_window, self.tray_pinned) {
@@ -1108,7 +1156,23 @@ impl Moonlight {
                 self.last_error = Some(localization::issue(&issue, self.locale()));
             }
             Event::Refreshed(outcome) => {
-                self.refresh_issue = outcome.as_ref().err().cloned();
+                // A link that did not load says nothing about the subscription
+                // in use, so only a success touches its status.
+                if let Some(LinkPrompt::Adding(link)) = self.link_prompt.clone() {
+                    self.link_prompt = match &outcome {
+                        Ok(()) => {
+                            self.refresh_issue = None;
+                            self.page = Page::Connect;
+                            self.page_started = Some(Instant::now());
+                            None
+                        }
+                        Err(issue) => Some(LinkPrompt::Failed(link, issue.clone())),
+                    };
+                    return Task::none();
+                }
+                if !self.importing || outcome.is_ok() {
+                    self.refresh_issue = outcome.as_ref().err().cloned();
+                }
                 if self.importing {
                     // A failed import goes back to the form with the reason on
                     // it, rather than sitting on a spinner that never resolves.
@@ -1470,7 +1534,11 @@ impl Moonlight {
         // The resize edges go on last, over everything: an undecorated window
         // has no non-client area for Windows to hit-test, so the app owns its
         // own borders.
-        screens::resize::frame(window.into())
+        let framed = screens::resize::frame(window.into());
+        match &self.link_prompt {
+            Some(prompt) => iced::widget::stack![framed, screens::link::view(self, prompt)].into(),
+            None => framed,
+        }
     }
 }
 
@@ -2478,6 +2546,16 @@ mod tests {
         // And the tray panel, with a search that matches nothing.
         app.tray_search = "zzz".into();
         let _ = screens::tray::view(&app);
+        // And every state of a link's question.
+        for prompt in [
+            LinkPrompt::Ask("https://example.com/sub/x".into()),
+            LinkPrompt::Adding("https://example.com/sub/x".into()),
+            LinkPrompt::Failed("https://example.com/sub/x".into(), Issue::LinkRejected),
+            LinkPrompt::Invalid,
+        ] {
+            app.link_prompt = Some(prompt);
+            let _ = app.main_view();
+        }
     }
 
     #[test]

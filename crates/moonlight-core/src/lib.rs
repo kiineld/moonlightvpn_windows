@@ -8,6 +8,7 @@ pub mod app_inventory;
 pub mod autostart;
 pub mod controller;
 pub mod country;
+pub mod deeplink;
 pub mod format;
 pub mod geodata;
 pub mod helper;

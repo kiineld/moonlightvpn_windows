@@ -10,6 +10,7 @@ pub mod connect;
 pub mod connections;
 pub mod header;
 pub mod import;
+pub mod link;
 pub mod logs;
 pub mod resize;
 pub mod settings;

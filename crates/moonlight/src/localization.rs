@@ -228,6 +228,19 @@ strings! {
     OpenWindow      => "Открыть"            / "Open",
     DisconnectVerb  => "Отключиться"        / "Disconnect",
 
+    // A moonlight:// link
+    LinkTitle       => "Добавить подписку?" / "Add this subscription?",
+    LinkBody        => "Ссылка с сайта или из чата хочет добавить подписку в moonlight." / "A link from a website or a chat wants to add a subscription to moonlight.",
+    LinkReplaces    => "Она заменит текущую подписку." / "It will replace your current subscription.",
+    LinkSame        => "Это ваша текущая подписка — она обновится." / "This is your current subscription — it will be updated.",
+    LinkAdd         => "Добавить"           / "Add",
+    LinkAdding      => "Загружаем подписку…" / "Loading the subscription…",
+    LinkClose       => "Закрыть"            / "Close",
+    LinkRetry       => "Ещё раз"            / "Try again",
+    LinkFailedTitle => "Подписка не добавлена" / "Subscription not added",
+    LinkInvalidTitle => "Эту ссылку не открыть" / "This link can't be opened",
+    LinkInvalidBody => "В ней нет ссылки на подписку." / "It doesn't contain a subscription link.",
+
     // Notifications
     Notifications   => "Уведомления"        / "Notifications",
     NotificationsNote => "Когда заканчивается тариф или трафик" / "When the plan or traffic runs out",
