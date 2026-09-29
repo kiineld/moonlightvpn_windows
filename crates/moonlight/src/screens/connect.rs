@@ -11,7 +11,7 @@ use moonlight_design::{icon, Icon};
 use crate::components;
 use crate::dial::Dial;
 use crate::localization::{t, S};
-use crate::{hspace, theme, vspace, Message, Moonlight, Page};
+use crate::{hspace, localization, theme, vspace, Message, Moonlight, Page};
 
 /// The dial's drawn size, from the composition.
 const DIAL: f32 = metrics::DIAL;
@@ -45,7 +45,7 @@ fn dial_label_size(label: &str) -> f32 {
 const STAT_VALUE: f32 = 20.0;
 
 pub fn view(app: &Moonlight) -> Element<'_, Message> {
-    row![
+    let columns = row![
         container(dial_column(app))
             .padding(24)
             .height(Length::Fill)
@@ -67,8 +67,60 @@ pub fn view(app: &Moonlight) -> Element<'_, Message> {
             }),
     ]
     .spacing(metrics::GAP_COLUMNS)
-    .height(Length::Fill)
-    .into()
+    .height(Length::Fill);
+
+    match app.announce() {
+        Some(message) => column![
+            components::announce_banner(message, Message::DismissAnnounce, app.palette_of()),
+            columns,
+        ]
+        .spacing(14)
+        .into(),
+        None => columns.into(),
+    }
+}
+
+/// What the refresh the user asked for came to: updated, or not and why.
+/// Refreshing used to turn the glyph and stop, and whether anything had
+/// happened was left to a timestamp on another page. Clicking it puts it away;
+/// otherwise it goes on its own.
+fn refresh_note(app: &Moonlight) -> Option<Element<'_, Message>> {
+    let palette = app.palette_of();
+    let locale = app.locale_of();
+    let (id, outcome) = app.refresh_note()?;
+    let (glyph, tone, title, detail) = match outcome {
+        Ok(()) => (
+            Icon::Check,
+            palette.st_up_ink,
+            t(S::RefreshDone, locale),
+            String::new(),
+        ),
+        Err(issue) => (
+            Icon::CircleAlert,
+            palette.danger,
+            t(S::RefreshFailed, locale),
+            localization::issue(issue, locale),
+        ),
+    };
+    let mut words = column![text(title)
+        .size(13.5)
+        .font(moonlight_design::ui(EMPHATIC))
+        .color(palette.text)]
+    .spacing(1);
+    if !detail.is_empty() {
+        words = words.push(text(detail).size(12.0).color(palette.text_muted));
+    }
+    Some(
+        button(
+            row![moonlight_design::icon(glyph, 15.0, tone), words]
+                .spacing(12)
+                .align_y(Alignment::Center),
+        )
+        .on_press(Message::HideRefreshNote(id))
+        .padding([9, 16])
+        .style(move |_, status| theme::row_button(palette, false, status))
+        .into(),
+    )
 }
 
 fn dial_column(app: &Moonlight) -> Element<'_, Message> {
@@ -187,10 +239,19 @@ fn dial_column(app: &Moonlight) -> Element<'_, Message> {
             style
         });
 
-    let hint: Element<'_, Message> = match app.last_error() {
+    // A failed connect first; failing that, why the subscription did not load —
+    // which, with nothing cached yet, is why there is nothing to connect to.
+    // Not while the refresh note below is saying the same thing.
+    let problem = app.last_error().map(str::to_string).or_else(|| {
+        app.refresh_note()
+            .is_none()
+            .then(|| app.refresh_issue().map(|issue| localization::issue(issue, locale)))
+            .flatten()
+    });
+    let hint: Element<'_, Message> = match problem {
         // A failure replaces the hint rather than sitting beside it: the hint
         // says "press to connect", which is exactly what has just not worked.
-        Some(error) => text(error.to_string())
+        Some(error) => text(error)
             .size(scale::META)
             .color(palette.danger)
             .into(),
@@ -238,11 +299,14 @@ fn dial_column(app: &Moonlight) -> Element<'_, Message> {
     .spacing(9)
     .align_y(Alignment::Center);
 
-    container(
-        column![press, hint_row, stats(app)]
-            .spacing(20)
-            .align_x(Alignment::Center),
-    )
+    let mut stack = column![press, hint_row, stats(app)]
+        .spacing(20)
+        .align_x(Alignment::Center);
+    if let Some(note) = refresh_note(app) {
+        stack = stack.push(note);
+    }
+
+    container(stack)
     // Centred in whatever height the panel has, which is what
     // `justify-content:center` does in the composition — and unlike a pair of
     // Fill spacers it still works when the height is unbounded.

@@ -3,6 +3,7 @@
 use iced::widget::{button, column, container, row, text};
 use iced::{Alignment, Border, Element, Length};
 
+use moonlight_core::preferences::AUTO_UPDATE_CHOICES;
 use moonlight_core::{AppLocale, TunnelMode};
 use moonlight_design::motion::radii;
 use moonlight_design::typography::{scale, EMPHATIC};
@@ -10,9 +11,7 @@ use moonlight_design::{icon, Icon};
 
 use crate::components;
 use crate::localization::{t, S};
-use crate::{
-    hspace, theme, vspace, Message, Moonlight, Page, SUPPORT_URL, TELEGRAM_CHANNEL_URL, VERSION,
-};
+use crate::{hspace, theme, vspace, Message, Moonlight, Page, TELEGRAM_CHANNEL_URL, VERSION};
 
 pub fn view(app: &Moonlight) -> Element<'_, Message> {
     row![
@@ -184,29 +183,66 @@ fn mode_row<'a>(
 
 /// The СИСТЕМА group.
 ///
-/// One row, not the three the composition draws. The other two it specifies —
-/// minimise-to-tray and connect-on-launch — are not implemented, and a switch
-/// that flips and changes nothing is worse than an absent one.
+/// Launch at sign-in and the subscription's schedule. Minimise-to-tray and
+/// connect-on-launch, which the composition also draws, are not implemented,
+/// and a switch that flips and changes nothing is worse than an absent one.
 fn system(app: &Moonlight) -> Element<'_, Message> {
     let palette = app.palette_of();
     let locale = app.locale_of();
 
-    let panel = column![components::setting_row(
-        t(S::LaunchAtLogin, locale).to_string(),
-        Some(t(S::LaunchAtLoginNote, locale).to_string()),
-        components::toggle(
-            app.preferences().launch_at_login,
-            Message::ToggleLaunchAtLogin,
+    let panel = column![
+        components::setting_row(
+            t(S::LaunchAtLogin, locale).to_string(),
+            Some(t(S::LaunchAtLoginNote, locale).to_string()),
+            components::toggle(
+                app.preferences().launch_at_login,
+                Message::ToggleLaunchAtLogin,
+                palette,
+            ),
             palette,
         ),
-        palette,
-    )];
+        components::divider(palette),
+        auto_update(app),
+    ];
 
     column![
         components::overline(t(S::SectionSystem, locale), palette),
         vspace(Length::Fixed(12.0)),
         components::surface(panel, palette),
     ]
+    .into()
+}
+
+/// How often the subscription refreshes itself: off, or every 1/6/12/24 h.
+/// Until the user picks, it follows what the service suggests.
+fn auto_update(app: &Moonlight) -> Element<'_, Message> {
+    let palette = app.palette_of();
+    let locale = app.locale_of();
+
+    let suggested = app.info().update_interval_hours;
+    let hours = app.preferences().auto_update_hours(suggested);
+    let labels: [&'static str; 5] = match locale {
+        AppLocale::Ru => ["Выкл", "1 ч", "6 ч", "12 ч", "24 ч"],
+        AppLocale::En => ["Off", "1 h", "6 h", "12 h", "24 h"],
+    };
+    let options: Vec<(u32, &str)> = AUTO_UPDATE_CHOICES.into_iter().zip(labels).collect();
+
+    let mut note = t(S::AutoUpdateSub, locale).to_string();
+    if let Some(updated) = app.last_updated() {
+        note = format!("{note} · {updated}");
+    }
+
+    column![
+        text(t(S::AutoUpdate, locale))
+            .size(14.5)
+            .font(moonlight_design::ui(EMPHATIC))
+            .color(palette.text),
+        text(note).size(12.0).color(palette.text_muted),
+        vspace(Length::Fixed(10.0)),
+        components::segmented(&options, hours, Message::SetAutoUpdate, palette),
+    ]
+    .spacing(2)
+    .padding([15, 18])
     .into()
 }
 
@@ -277,7 +313,7 @@ fn support(app: &Moonlight) -> Element<'_, Message> {
             t(S::Support, locale).to_string(),
             t(S::SupportNote, locale).to_string(),
             Some(Icon::ExternalLink),
-            Some(Message::OpenUrl(SUPPORT_URL)),
+            Some(Message::OpenSupport),
             palette,
         ),
         components::divider(palette),

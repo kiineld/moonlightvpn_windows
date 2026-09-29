@@ -8,7 +8,7 @@
 //! it can, because these are read inside view functions that run on every
 //! redraw.
 
-use moonlight_core::AppLocale;
+use moonlight_core::{AppLocale, Issue};
 
 macro_rules! strings {
     ($($name:ident => $ru:literal / $en:literal),* $(,)?) => {
@@ -77,8 +77,6 @@ strings! {
     Traffic         => "ТРАФИК"             / "TRAFFIC",
     Devices         => "УСТРОЙСТВА"         / "DEVICES",
     RefreshSubscription => "Обновить подписку" / "Refresh subscription",
-    RefreshedJustNow => "Обновлено только что" / "Refreshed just now",
-    OpensAccount    => "Откроется личный кабинет" / "Opens your account page",
     PasteFromBot    => "Вставить ссылку из бота" / "Paste a link from the bot",
     RemoveSubscription => "Удалить подписку" / "Remove subscription",
     ValidUntil      => "действует до"       / "valid until",
@@ -89,7 +87,36 @@ strings! {
     AddSubscription => "Добавить подписку"  / "Add a subscription",
     Unlimited       => "Безлимит"           / "Unlimited",
     ExtendSubscription => "Продлить подписку" / "Extend subscription",
+    ExtendSubtitle  => "В Telegram-боте"    / "In the Telegram bot",
+    PersonalAccount => "Личный кабинет"     / "Personal account",
+    PersonalAccountSub => "Устройства и подписка на сайте" / "Devices and subscription on the website",
+    RemoveSubscriptionSub => "Удаляет ссылку с этого компьютера" / "Removes the link from this computer",
+    RefreshMetaIdle => "Проверить серверы, дни и трафик" / "Check servers, days and traffic",
+    RefreshMetaSyncing => "Синхронизация с сервером…" / "Syncing with the server…",
+    LastUpdated     => "Обновлено"          / "Updated",
+    Ago             => "назад"              / "ago",
+    TrafficResets   => "Трафик обновится"   / "Traffic resets",
+    RefreshDone     => "Подписка обновлена" / "Subscription updated",
+    RefreshFailed   => "Подписка не обновлена" / "Subscription not updated",
+    HideAnnounce    => "Скрыть"             / "Hide",
     OfTraffic       => "трафика"            / "of traffic",
+
+    // Problems, worded by the app — never the service's or the core's text,
+    // which can name the service or carry the link.
+    IssueInvalidLink => "Это не похоже на ссылку подписки" / "This doesn't look like a subscription link",
+    IssueNoSubscription => "Сначала добавьте подписку" / "Add a subscription first",
+    IssueServerUnavailable => "Сервер подписки временно недоступен" / "The subscription server is temporarily unavailable",
+    IssueErrorCode  => "ошибка"             / "error",
+    IssueTryLater   => "Попробуйте позже."  / "Try again later.",
+    IssueLinkRejected => "Ссылка больше не действует. Возьмите новую в боте." / "This link no longer works. Get a new one from the bot.",
+    IssueEmpty      => "В подписке нет серверов" / "The subscription has no servers",
+    IssueNoUsable   => "В подписке нет серверов, которые поддерживает приложение" / "None of the subscription's servers work with this app",
+    IssueDeviceLimit => "Достигнут лимит устройств. Отключите другое устройство в личном кабинете." / "Device limit reached. Remove another device in your account.",
+    IssueDeviceNotSupported => "Подписка не принимает это устройство" / "The subscription doesn't accept this device",
+    IssueCoreFailed => "Не удалось запустить VPN. Подробности — в логах." / "Couldn't start the VPN. See the logs for details.",
+    IssueRoutesTaken => "Маршруты заняты другим VPN. Закройте его или включите режим системного прокси." / "Another VPN owns the system routes. Quit it or use system proxy mode.",
+    IssueTunFailed  => "Не удалось создать TUN-интерфейс. Подробности — в логах." / "Couldn't create the TUN interface. See the logs for details.",
+    IssueHelperMissing => "Для TUN нужна служба — установите её в настройках" / "TUN needs the helper service — install it in Settings",
 
     // Import
     ImportTitle     => "Добавить подписку"  / "Add a subscription",
@@ -138,6 +165,10 @@ strings! {
     Language        => "Язык"               / "Language",
     LaunchAtLogin   => "Запускать при входе в систему" / "Launch at sign-in",
     LaunchAtLoginNote => "Moonlight запустится вместе с Windows" / "Moonlight starts with Windows",
+    AutoUpdate      => "Автообновление подписки" / "Update the subscription automatically",
+    AutoUpdateSub   => "Как часто проверять серверы, дни и трафик" / "How often to check servers, days and traffic",
+    AutoUpdateOff   => "Выкл"               / "Off",
+    HoursShort      => "ч"                  / "h",
     AutostartFailed => "Не удалось изменить автозапуск" / "Could not change the startup setting",
     MinimiseToTray  => "Свернуть в системный трей" / "Minimise to the system tray",
     MinimiseToTrayNote => "Окно закрывается в трей, туннель работает" / "Closing the window leaves the tunnel running",
@@ -197,6 +228,36 @@ strings! {
 /// Shorthand so a view reads `t(S::Connect, locale)`.
 pub fn t(string: S, locale: AppLocale) -> &'static str {
     string.get(locale)
+}
+
+/// The app's own words for a problem.
+pub fn issue(issue: &Issue, locale: AppLocale) -> String {
+    let s = |key| t(key, locale).to_string();
+    match issue {
+        Issue::InvalidLink => s(S::IssueInvalidLink),
+        Issue::NoSubscription => s(S::IssueNoSubscription),
+        Issue::ServerUnavailable(code) => {
+            let status = code
+                .map(|code| format!(" ({} {code})", t(S::IssueErrorCode, locale)))
+                .unwrap_or_default();
+            format!(
+                "{}{status}. {}",
+                t(S::IssueServerUnavailable, locale),
+                t(S::IssueTryLater, locale)
+            )
+        }
+        Issue::LinkRejected => s(S::IssueLinkRejected),
+        Issue::EmptySubscription => s(S::IssueEmpty),
+        Issue::NoUsableServers => s(S::IssueNoUsable),
+        // The service's own explanation is the one text shown as it came: it
+        // is written for users, and knows the plan's limit.
+        Issue::DeviceLimit(message) => message.clone().unwrap_or_else(|| s(S::IssueDeviceLimit)),
+        Issue::DeviceNotSupported => s(S::IssueDeviceNotSupported),
+        Issue::CoreFailed => s(S::IssueCoreFailed),
+        Issue::RoutesTaken => s(S::IssueRoutesTaken),
+        Issue::TunFailed => s(S::IssueTunFailed),
+        Issue::HelperMissing => s(S::IssueHelperMissing),
+    }
 }
 
 #[cfg(test)]

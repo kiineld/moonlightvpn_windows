@@ -26,7 +26,7 @@ use moonlight_core::preferences::Preferences;
 use moonlight_core::split_rule::{self, Kind, SplitRule};
 use moonlight_core::subscription::Source;
 use moonlight_core::{
-    AppEntry, AppLocale, ConnectionState, Node, SplitMode, SubscriptionInfo, TunnelMode,
+    AppEntry, AppLocale, ConnectionState, Issue, Node, SplitMode, SubscriptionInfo, TunnelMode,
 };
 use moonlight_design::motion::{self, dur, Curve};
 use moonlight_design::{Appearance, Palette};
@@ -56,6 +56,12 @@ pub const TELEGRAM_CHANNEL_URL: &str = match option_env!("TELEGRAM_CHANNEL_URL")
 pub const SUPPORT_URL: &str = match option_env!("SUPPORT_URL") {
     Some(url) => url,
     None => "https://t.me/moonlight_vps",
+};
+/// The personal account: devices and the plan, on the service's own site —
+/// a different host from the one subscriptions are served from.
+pub const CABINET_URL: &str = match option_env!("CABINET_URL") {
+    Some(url) => url,
+    None => "https://cabinetofficial.rustafield.site",
 };
 
 /// The controller's channels, handed over to the subscription once.
@@ -200,6 +206,17 @@ pub enum Message {
     SelectNode(String),
     Ping,
     Refresh,
+    /// Every five minutes: asks the controller to refresh if one is due.
+    AutoUpdateTick,
+    /// Hours between automatic refreshes; 0 is off.
+    SetAutoUpdate(u32),
+    /// Put the service's current announcement away.
+    DismissAnnounce,
+    /// The refresh note at the foot of the connect page goes, if it is still
+    /// the one with this id.
+    HideRefreshNote(u64),
+    /// The service's own support contact when it sent one, else the app's.
+    OpenSupport,
 
     ImportChanged(String),
     ImportSubmit,
@@ -283,6 +300,14 @@ pub struct Moonlight {
     is_pinging: bool,
     is_refreshing: bool,
     last_error: Option<String>,
+    /// Why the last subscription refresh failed, for the subscription page.
+    refresh_issue: Option<Issue>,
+    /// A refresh the user asked for is in flight, so its outcome is reported
+    /// on the connect page; a scheduled one only goes to the log.
+    refresh_asked: bool,
+    /// What the last asked-for refresh came to, shown briefly at the foot of
+    /// the connect page. The id lets a newer note outlive an older's timer.
+    refresh_note: Option<(u64, Result<(), Issue>)>,
 
     apps: Vec<AppEntry>,
     /// Executable → the programme's own icon, keyed the same way the app list
@@ -391,6 +416,9 @@ impl Moonlight {
             is_pinging: false,
             is_refreshing: false,
             last_error: None,
+            refresh_issue: None,
+            refresh_asked: false,
+            refresh_note: None,
             apps: Vec::new(),
             app_icons: std::collections::HashMap::new(),
             running: Vec::new(),
@@ -605,7 +633,29 @@ impl Moonlight {
                 send(Command::SelectNode(name));
             }
             Message::Ping => send(Command::Ping),
-            Message::Refresh => send(Command::Refresh),
+            Message::Refresh => {
+                self.refresh_asked = true;
+                send(Command::Refresh);
+            }
+            Message::AutoUpdateTick => send(Command::RefreshIfDue),
+            Message::SetAutoUpdate(hours) => {
+                self.preferences.auto_update_hours = Some(hours);
+                self.save();
+                send(Command::SetAutoUpdate(hours));
+            }
+            Message::DismissAnnounce => {
+                self.preferences.dismissed_announce = self.info.announce.clone();
+                self.save();
+            }
+            Message::HideRefreshNote(id) => {
+                if self.refresh_note.as_ref().is_some_and(|(shown, _)| *shown == id) {
+                    self.refresh_note = None;
+                }
+            }
+            Message::OpenSupport => {
+                let url = self.info.support_url.clone();
+                open_url(url.as_deref().unwrap_or(SUPPORT_URL));
+            }
 
             Message::ImportChanged(value) => self.import_field = value,
             Message::ImportSubmit => {
@@ -872,20 +922,12 @@ impl Moonlight {
                 if !state.is_busy() {
                     self.transition_started = None;
                 }
-                if let ConnectionState::Failed(why) = &state {
-                    self.last_error = Some(why.clone());
+                if let ConnectionState::Failed(issue) = &state {
+                    self.last_error = Some(localization::issue(issue, self.locale()));
                 }
                 self.state = state;
             }
-            Event::Nodes(nodes) => {
-                // Nodes arriving is what "it worked" looks like from here: the
-                // panel answered and the core loaded what it sent.
-                if self.importing && !nodes.is_empty() {
-                    self.importing = false;
-                    self.import_done = true;
-                }
-                self.nodes = nodes;
-            }
+            Event::Nodes(nodes) => self.nodes = nodes,
             Event::Info(info) => self.info = info,
             Event::Source(source) => self.source = source,
             Event::Uptime(seconds) => self.uptime_seconds = seconds,
@@ -923,11 +965,33 @@ impl Moonlight {
                     self.logs.drain(..excess);
                 }
             }
-            Event::Error(why) => {
-                // A failed import goes back to the form with the reason on it,
-                // rather than sitting on a spinner that never resolves.
-                self.importing = false;
-                self.last_error = Some(why);
+            Event::Error(issue) => {
+                self.last_error = Some(localization::issue(&issue, self.locale()));
+            }
+            Event::Refreshed(outcome) => {
+                self.refresh_issue = outcome.as_ref().err().cloned();
+                if self.importing {
+                    // A failed import goes back to the form with the reason on
+                    // it, rather than sitting on a spinner that never resolves.
+                    self.importing = false;
+                    match &outcome {
+                        Ok(()) => self.import_done = true,
+                        Err(issue) => {
+                            self.last_error = Some(localization::issue(issue, self.locale()))
+                        }
+                    }
+                }
+                if std::mem::take(&mut self.refresh_asked) {
+                    let id = self.refresh_note.as_ref().map_or(0, |(id, _)| id + 1);
+                    // Long enough to read; a failure carries a reason, so it
+                    // stays longer.
+                    let shown_for = if outcome.is_ok() { 3200 } else { 6000 };
+                    self.refresh_note = Some((id, outcome));
+                    return Task::perform(
+                        tokio::time::sleep(Duration::from_millis(shown_for)),
+                        move |()| Message::HideRefreshNote(id),
+                    );
+                }
             }
             Event::ShutdownComplete => return with_window(iced::window::close),
             Event::PreferencesChanged(preferences) => {
@@ -938,17 +1002,25 @@ impl Moonlight {
                 let sidebar = self.preferences.sidebar_collapsed;
                 let appearance = self.preferences.appearance.clone();
                 let locale = self.preferences.locale;
+                let dismissed = self.preferences.dismissed_announce.clone();
                 self.preferences = *preferences;
                 self.preferences.sidebar_collapsed = sidebar;
                 self.preferences.appearance = appearance;
                 self.preferences.locale = locale;
+                self.preferences.dismissed_announce = dismissed;
             }
         }
         Task::none()
     }
 
     fn subscription(&self) -> Subscription<Message> {
-        let mut subscriptions = vec![Subscription::run(controller_events)];
+        let mut subscriptions = vec![
+            Subscription::run(controller_events),
+            // The controller decides whether anything is due; this only asks.
+            // A timer rather than a wake notification: after sleep the missed
+            // tick fires at once, which is the catch-up a wake handler would do.
+            iced::time::every(Duration::from_secs(300)).map(|_| Message::AutoUpdateTick),
+        ];
 
         // An entrance or a rail glide needs frames regardless of what the
         // tunnel is doing, and both are short.
@@ -1531,6 +1603,28 @@ impl Moonlight {
     pub fn last_error(&self) -> Option<&str> {
         self.last_error.as_deref()
     }
+    /// "Обновлено 36 мин назад", from the last refresh that worked.
+    pub fn last_updated(&self) -> Option<String> {
+        let last = self.preferences.last_refresh?;
+        let now = time::OffsetDateTime::now_utc().unix_timestamp();
+        Some(format!(
+            "{} {} {}",
+            t(S::LastUpdated, self.locale()),
+            moonlight_core::format::age(now - last, self.locale()),
+            t(S::Ago, self.locale())
+        ))
+    }
+    pub fn refresh_issue(&self) -> Option<&Issue> {
+        self.refresh_issue.as_ref()
+    }
+    pub fn refresh_note(&self) -> Option<(u64, &Result<(), Issue>)> {
+        self.refresh_note.as_ref().map(|(id, outcome)| (*id, outcome))
+    }
+    /// The service's announcement, unless the user has put this one away.
+    pub fn announce(&self) -> Option<&str> {
+        let announce = self.info.announce.as_deref()?;
+        (self.preferences.dismissed_announce.as_deref() != Some(announce)).then_some(announce)
+    }
     pub fn apps(&self) -> &[AppEntry] {
         &self.apps
     }
@@ -1778,8 +1872,11 @@ mod tests {
     #[test]
     fn a_failure_is_kept_where_the_screens_can_show_it() {
         let mut app = app();
-        let _ = app.apply(Event::State(ConnectionState::Failed("no route".into())));
-        assert_eq!(app.last_error(), Some("no route"));
+        let _ = app.apply(Event::State(ConnectionState::Failed(Issue::RoutesTaken)));
+        assert_eq!(
+            app.last_error(),
+            Some(localization::t(S::IssueRoutesTaken, app.locale()))
+        );
     }
 
     #[test]

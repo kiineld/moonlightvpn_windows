@@ -35,9 +35,11 @@ use tokio::sync::{mpsc, Mutex};
 
 use crate::api::{Connection, LogLine, MihomoApi, Traffic};
 use crate::helper::{self, Request, Response};
+use crate::issue::Issue;
 use crate::models::{ConnectionState, Node, SplitMode, SubscriptionInfo, TunnelMode};
 use crate::preferences::{self, Preferences};
 use crate::process::MihomoProcess;
+use crate::redact::{self, Redactions};
 use crate::split_rule::SplitRule;
 use crate::subscription::{self, DeviceIdentity, Source, SubscriptionClient};
 use crate::system_proxy;
@@ -61,8 +63,14 @@ pub enum Command {
     Disconnect,
     SelectNode(String),
     SetAutoSelect(bool),
-    /// Re-fetch the subscription from the panel.
+    /// Re-fetch the subscription.
     Refresh,
+    /// Re-fetch it if the auto-update interval has passed. Sent on a timer, so
+    /// it is cheap when nothing is due — and a machine asleep through the due
+    /// time catches up on the first tick after it wakes.
+    RefreshIfDue,
+    /// Hours between automatic refreshes; 0 is off.
+    SetAutoUpdate(u32),
     /// Measure every node.
     Ping,
     ImportSubscription(String),
@@ -104,7 +112,11 @@ pub enum Event {
     Refreshing(bool),
     Connections(Vec<Connection>),
     Log(LogEntry),
-    Error(String),
+    /// Something went wrong that the user needs to know about.
+    Error(Issue),
+    /// A subscription fetch finished — asked for, imported or scheduled — and
+    /// whether it worked. The connect page says so at its foot.
+    Refreshed(Result<(), Issue>),
     /// Everything that had to be put back has been: the proxy settings are
     /// restored and the core — this app's or the helper's — is stopped. The UI
     /// waits for this before closing its window, because closing first races
@@ -186,6 +198,10 @@ pub struct Controller {
     /// reporting an ever-growing uptime over the `0` disconnect wrote, so the
     /// timer never returned to zero.
     polling: Option<tokio::task::JoinHandle<()>>,
+    /// Masks the link and server addresses out of every log line, the app's
+    /// and the core's alike.
+    redactions: Redactions,
+    refreshing: bool,
 }
 
 impl Controller {
@@ -198,6 +214,13 @@ impl Controller {
             core_binary(),
             preferences::core_data_directory(),
         )));
+        let redactions = Redactions::default();
+        redactions.set(redact::secrets(
+            preferences.subscription_url.as_deref(),
+            std::fs::read_to_string(preferences::subscription_path())
+                .ok()
+                .as_deref(),
+        ));
         Controller {
             preferences,
             state: ConnectionState::Disconnected,
@@ -211,6 +234,8 @@ impl Controller {
             pinging: false,
             probed: std::collections::HashSet::new(),
             polling: None,
+            redactions,
+            refreshing: false,
         }
     }
 
@@ -219,6 +244,7 @@ impl Controller {
     }
 
     fn narrate(&self, level: &str, message: impl Into<String>) {
+        let message = self.redactions.apply(&message.into());
         self.emit(Event::Log(LogEntry::app(level, message)));
     }
 
@@ -227,7 +253,20 @@ impl Controller {
         self.emit(Event::State(state));
     }
 
-    fn save(&self) {
+    /// Writes what the controller owns, and leaves what the UI owns as the UI
+    /// last wrote it.
+    ///
+    /// Both write the one file, whole. The controller's copy of the view
+    /// settings is the one it was handed at launch, so a save after a ping
+    /// used to put back the theme, language and sidebar from before the user
+    /// changed them — and the next launch opened with the old ones.
+    fn save(&mut self) {
+        let on_disk = Preferences::load();
+        self.preferences.appearance = on_disk.appearance;
+        self.preferences.locale = on_disk.locale;
+        self.preferences.sidebar_collapsed = on_disk.sidebar_collapsed;
+        self.preferences.launch_at_login = on_disk.launch_at_login;
+        self.preferences.dismissed_announce = on_disk.dismissed_announce;
         let _ = self.preferences.save();
         self.emit(Event::PreferencesChanged(Box::new(
             self.preferences.clone(),
@@ -247,6 +286,11 @@ impl Controller {
                     self.save();
                 }
                 Command::Refresh => self.refresh().await,
+                Command::RefreshIfDue => self.refresh_if_due().await,
+                Command::SetAutoUpdate(hours) => {
+                    self.preferences.auto_update_hours = Some(hours);
+                    self.save();
+                }
                 Command::Ping => self.ping().await,
                 Command::ImportSubscription(url) => self.import(url).await,
                 Command::RemoveSubscription => self.remove_subscription().await,
@@ -335,56 +379,124 @@ impl Controller {
             }
         }
 
-        // 4. Now it is safe to warm a core.
-        if self.preferences.subscription_url.is_some() {
-            self.refresh().await;
+        // 4. Now it is safe to warm a core — from the subscription as it was
+        //    last fetched, so the app can connect whether or not the service
+        //    answers today, and then from the network once it is due.
+        if self.preferences.subscription_url.is_none() {
+            return;
+        }
+        match std::fs::read_to_string(preferences::subscription_path()) {
+            Ok(yaml) => {
+                self.panel_yaml = Some(yaml);
+                if let Some(info) = self.preferences.cached_info.clone() {
+                    self.emit(Event::Info(info));
+                }
+                self.restart_core().await;
+                self.refresh_if_due().await;
+            }
+            // Nothing cached yet (a first launch, or one from before the cache
+            // existed): the network is the only source.
+            Err(_) => self.refresh().await,
         }
     }
 
-    /// Fetches the subscription and (re)starts the idle core against it.
+    /// Fetches the subscription and reloads the running core with it.
     async fn refresh(&mut self) {
         let Some(url) = self.preferences.subscription_url.clone() else {
             return;
         };
-        self.emit(Event::Refreshing(true));
+        let outcome = self.fetch_subscription(url, false).await;
+        self.emit(Event::Refreshed(outcome));
+    }
 
-        let client = match SubscriptionClient::new(self.device_identity()) {
-            Ok(client) => client,
-            Err(error) => {
-                self.emit(Event::Refreshing(false));
-                self.fail(error.to_string());
-                return;
-            }
-        };
-
-        match client.fetch(&url).await {
-            Err(error) => {
-                self.emit(Event::Refreshing(false));
-                self.narrate("ERROR", format!("Subscription refresh failed: {error}"));
-                self.emit(Event::Error(error.to_string()));
-            }
-            Ok(fetched) => {
-                // `/info` fills in the device count the headers do not carry;
-                // the headers still win field by field.
-                let info = match client.fetch_info(&url).await {
-                    Some(document) => subscription::merging(&document, &fetched.info),
-                    None => fetched.info.clone(),
-                };
-                self.narrate(
-                    "INFO",
-                    format!(
-                        "Subscription loaded from the {} endpoint",
-                        fetched.source.as_str()
-                    ),
-                );
-                self.panel_yaml = Some(fetched.yaml);
-                self.emit(Event::Source(Some(fetched.source)));
-                self.emit(Event::Info(info));
-                self.emit(Event::Refreshing(false));
-
-                self.restart_core().await;
-            }
+    /// Refreshes if the auto-update interval has passed since the last refresh
+    /// that worked. A failed one does not count, so the next tick tries again.
+    async fn refresh_if_due(&mut self) {
+        let suggested = self
+            .preferences
+            .cached_info
+            .as_ref()
+            .and_then(|info| info.update_interval_hours);
+        let now = time::OffsetDateTime::now_utc().unix_timestamp();
+        if self.refreshing || !self.preferences.refresh_due(suggested, now) {
+            return;
         }
+        let hours = self.preferences.auto_update_hours(suggested);
+        self.narrate(
+            "INFO",
+            format!("Auto-updating the subscription (every {hours} h)"),
+        );
+        self.refresh().await;
+    }
+
+    /// Fetches `url` and, once it has loaded, makes it the subscription.
+    ///
+    /// `adopting` is an import: the link becomes the current one only after it
+    /// has loaded. It used to be stored first, so a mistyped link — or a server
+    /// having a bad minute — replaced a working subscription with one that
+    /// loads nothing.
+    async fn fetch_subscription(&mut self, url: String, adopting: bool) -> Result<(), Issue> {
+        self.refreshing = true;
+        self.emit(Event::Refreshing(true));
+        let outcome = self.fetch_subscription_inner(url, adopting).await;
+        self.refreshing = false;
+        self.emit(Event::Refreshing(false));
+        outcome
+    }
+
+    async fn fetch_subscription_inner(&mut self, url: String, adopting: bool) -> Result<(), Issue> {
+        let client = SubscriptionClient::new(self.device_identity()).map_err(|e| Issue::from(&e))?;
+        let fetched = client.fetch(&url).await.map_err(|failure| {
+            self.narrate("WARNING", format!("Subscription update failed: {failure}"));
+            Issue::from(&failure)
+        })?;
+
+        let replacing = adopting && self.preferences.subscription_url.as_deref() != Some(&url);
+        if adopting {
+            self.preferences.subscription_url = Some(url.clone());
+        }
+        if replacing {
+            // Another subscription's choices mean nothing for this one.
+            self.preferences.selected_node = None;
+            self.preferences.auto_select = true;
+            self.preferences.latencies.clear();
+            self.preferences.unreachable.clear();
+            self.preferences.cached_info = None;
+        }
+
+        // `/info` fills in the device count the headers do not carry; the
+        // headers still win field by field.
+        let mut info = match client.fetch_info(&url).await {
+            Some(document) => subscription::merging(&document, &fetched.info),
+            None => fetched.info.clone(),
+        };
+        if info.title.is_none() {
+            info.title = self.preferences.cached_info.as_ref().and_then(|i| i.title.clone());
+        }
+        if let Err(error) = std::fs::write(preferences::subscription_path(), &fetched.yaml) {
+            self.narrate("WARNING", format!("Could not cache the subscription: {error}"));
+        }
+        self.preferences.cached_info = Some(info.clone());
+        self.preferences.last_refresh = Some(time::OffsetDateTime::now_utc().unix_timestamp());
+        self.save();
+
+        self.redactions.set(redact::secrets(Some(&url), Some(&fetched.yaml)));
+        self.narrate(
+            "INFO",
+            format!(
+                "Subscription loaded from the {} endpoint",
+                fetched.source.as_str()
+            ),
+        );
+        self.panel_yaml = Some(fetched.yaml);
+        self.emit(Event::Source(Some(fetched.source)));
+        self.emit(Event::Info(info));
+
+        // Every refresh reloads the running core from what was just written —
+        // the idle one and a connected one alike — so the list and the tunnel
+        // are the subscription the screen describes.
+        self.restart_core().await;
+        Ok(())
     }
 
     /// Writes the config and starts (or reloads) the core it describes.
@@ -401,7 +513,7 @@ impl Controller {
             let _ = std::fs::create_dir_all(parent);
         }
         if let Err(error) = std::fs::write(&path, &config) {
-            self.fail(format!("Could not write the core config: {error}"));
+            self.fail(Issue::CoreFailed, format!("Could not write the core config: {error}"));
             return;
         }
 
@@ -409,8 +521,8 @@ impl Controller {
             // The privileged core owns its own copy of the config.
             match helper::send(&Request::Start { config }, Duration::from_secs(30)) {
                 Ok(Response::Started) => {}
-                Ok(Response::Error { message }) => return self.fail(message),
-                _ => return self.fail("The helper did not answer".to_string()),
+                Ok(Response::Error { message }) => return self.fail(Issue::CoreFailed, message),
+                _ => return self.fail(Issue::HelperMissing, "The helper did not answer"),
             }
         } else if self.api.version().await.is_ok() {
             // A core is already up: reload it rather than dropping the tunnel.
@@ -440,7 +552,10 @@ impl Controller {
             self.narrate("INFO", "Downloading geo databases (one time, ~15 MB)");
         }
         if let Err(error) = crate::geodata::ensure(&directory).await {
-            return self.fail(format!("Could not download the geo databases. {error}"));
+            return self.fail(
+                Issue::CoreFailed,
+                format!("Could not download the geo databases. {error}"),
+            );
         }
 
         let (tx, mut rx) = mpsc::unbounded_channel::<String>();
@@ -449,19 +564,20 @@ impl Controller {
             core.stop().await;
             if let Err(error) = core.start(path, Some(tx)).await {
                 drop(core);
-                return self.fail(error.to_string());
+                return self.fail(Issue::CoreFailed, error.to_string());
             }
         }
 
         // The core's stdout is narrated onto the same timeline as the app's own
         // lines, which is what makes a failed connect readable.
         let events = self.events.clone();
+        let redactions = self.redactions.clone();
         tokio::spawn(async move {
             while let Some(line) = rx.recv().await {
                 let _ = events.send(Event::Log(LogEntry {
                     source: LogSource::Core,
                     level: level_of(&line),
-                    message: line,
+                    message: redactions.apply(&line),
                     at: time::OffsetDateTime::now_utc().unix_timestamp(),
                 }));
             }
@@ -469,7 +585,8 @@ impl Controller {
 
         if !self.api.wait_until_ready(Duration::from_secs(45)).await {
             return self.fail(
-                "The core did not answer its API. It may still be downloading geodata.".to_string(),
+                Issue::CoreFailed,
+                "The core did not answer its API. It may still be downloading geodata.",
             );
         }
         self.narrate("INFO", "Core is up");
@@ -480,8 +597,10 @@ impl Controller {
     fn stream_core_logs(&self) {
         let mut lines = self.api.log_stream("info");
         let events = self.events.clone();
+        let redactions = self.redactions.clone();
         tokio::spawn(async move {
-            while let Some(line) = lines.recv().await {
+            while let Some(mut line) = lines.recv().await {
+                line.payload = redactions.apply(&line.payload);
                 let _ = events.send(Event::Log(LogEntry::core(&line)));
             }
         });
@@ -676,7 +795,7 @@ impl Controller {
             return;
         }
         if self.panel_yaml.is_none() {
-            return self.fail("Add a subscription first".to_string());
+            return self.fail(Issue::NoSubscription, "Connect asked with no subscription");
         }
         self.set_state(ConnectionState::Connecting);
         self.narrate(
@@ -697,7 +816,7 @@ impl Controller {
         let config = self.build_config();
         self.state = ConnectionState::Connecting;
         let Some(config) = config else {
-            return self.fail("Could not build the core config".to_string());
+            return self.fail(Issue::NoUsableServers, "Could not build the core config");
         };
 
         let path = preferences::config_path();
@@ -707,36 +826,40 @@ impl Controller {
             let _ = std::fs::create_dir_all(parent);
         }
         if let Err(error) = std::fs::write(&path, &config) {
-            return self.fail(format!("Could not write the core config: {error}"));
+            return self.fail(Issue::CoreFailed, format!("Could not write the core config: {error}"));
         }
 
         match self.preferences.mode {
             TunnelMode::Tun => {
                 if !helper::is_installed() {
-                    return self.fail(
-                        "TUN needs the Moonlight helper service. Install it in Settings."
-                            .to_string(),
-                    );
+                    return self.fail(Issue::HelperMissing, "TUN needs the helper service");
                 }
                 // 3.
                 self.core.lock().await.stop().await;
                 self.narrate("INFO", "Handing the core to the privileged helper");
                 match helper::send(&Request::Start { config }, Duration::from_secs(45)) {
                     Ok(Response::Started) => {}
-                    Ok(Response::Error { message }) => return self.fail(message),
-                    Ok(_) => return self.fail("The helper gave an unexpected reply".to_string()),
-                    Err(error) => return self.fail(error),
+                    Ok(Response::Error { message }) => {
+                        return self.fail(Issue::CoreFailed, message)
+                    }
+                    Ok(_) => {
+                        return self.fail(Issue::CoreFailed, "The helper gave an unexpected reply")
+                    }
+                    Err(error) => return self.fail(Issue::HelperMissing, error),
                 }
                 if !self.api.wait_until_ready(Duration::from_secs(45)).await {
-                    return self.fail("The privileged core did not answer its API".to_string());
+                    return self.fail(
+                        Issue::CoreFailed,
+                        "The privileged core did not answer its API",
+                    );
                 }
                 self.stream_core_logs();
 
                 // 4. The failure that does not look like one.
                 tokio::time::sleep(Duration::from_millis(1200)).await;
-                if let Some(reason) = self.tun_failure().await {
+                if let Some((issue, reason)) = self.tun_failure().await {
                     let _ = helper::send(&Request::Stop, Duration::from_secs(10));
-                    return self.fail(reason);
+                    return self.fail(issue, reason);
                 }
             }
             TunnelMode::SystemProxy => {
@@ -746,11 +869,17 @@ impl Controller {
                         return;
                     }
                 } else if let Err(error) = self.api.reload(&path.to_string_lossy()).await {
-                    return self.fail(format!("Could not load the config: {error}"));
+                    return self.fail(
+                        Issue::CoreFailed,
+                        format!("Could not load the config: {error}"),
+                    );
                 }
                 // 5.
                 if !system_proxy::enable(self.preferences.mixed_port) {
-                    return self.fail("Could not write the system proxy settings".to_string());
+                    return self.fail(
+                        Issue::CoreFailed,
+                        "Could not write the system proxy settings",
+                    );
                 }
                 self.narrate("INFO", "System proxy settings written");
             }
@@ -766,7 +895,7 @@ impl Controller {
     }
 
     /// The core's TUN failure is not a crash, so it has to be asked for.
-    async fn tun_failure(&self) -> Option<String> {
+    async fn tun_failure(&self) -> Option<(Issue, String)> {
         let log = self.core.lock().await.log();
         MihomoProcess::tun_failure(&log)
     }
@@ -936,12 +1065,11 @@ impl Controller {
     }
 
     async fn import(&mut self, url: String) {
-        let Some(normalised) = subscription::normalize(&url) else {
-            return self.fail("That is not a valid subscription link".to_string());
+        let outcome = match subscription::normalize(&url) {
+            Some(normalised) => self.fetch_subscription(normalised, true).await,
+            None => Err(Issue::InvalidLink),
         };
-        self.preferences.subscription_url = Some(normalised);
-        self.save();
-        self.refresh().await;
+        self.emit(Event::Refreshed(outcome));
     }
 
     async fn remove_subscription(&mut self) {
@@ -951,7 +1079,11 @@ impl Controller {
         self.preferences.subscription_url = None;
         self.preferences.selected_node = None;
         self.preferences.latencies.clear();
+        self.preferences.unreachable.clear();
+        self.preferences.cached_info = None;
+        self.preferences.last_refresh = None;
         self.save();
+        let _ = std::fs::remove_file(preferences::subscription_path());
         self.panel_yaml = None;
         self.core.lock().await.stop().await;
         self.emit(Event::Nodes(Vec::new()));
@@ -1009,10 +1141,13 @@ impl Controller {
         self.emit(Event::ShutdownComplete);
     }
 
-    fn fail(&mut self, why: String) {
-        self.narrate("ERROR", why.clone());
-        self.set_state(ConnectionState::Failed(why.clone()));
-        self.emit(Event::Error(why));
+    /// The kind goes to the screen, the detail to the log — the detail can
+    /// quote a path, a core message or a request, and the screen words each
+    /// kind itself.
+    fn fail(&mut self, issue: Issue, detail: impl Into<String>) {
+        self.narrate("ERROR", detail);
+        self.set_state(ConnectionState::Failed(issue.clone()));
+        self.emit(Event::Error(issue));
     }
 
     fn device_identity(&self) -> DeviceIdentity {

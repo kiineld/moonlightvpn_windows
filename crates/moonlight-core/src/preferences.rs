@@ -27,7 +27,7 @@ use std::path::PathBuf;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::models::{AppLocale, SplitMode, TunnelMode};
+use crate::models::{AppLocale, SplitMode, SubscriptionInfo, TunnelMode};
 use crate::split_rule::SplitRule;
 use crate::system_proxy::Snapshot;
 
@@ -62,6 +62,44 @@ pub struct Preferences {
     pub api_secret: String,
     pub controller_port: u16,
     pub mixed_port: u16,
+    /// The user's auto-update interval in hours, 0 for off; `None` follows the
+    /// service's suggestion. See [`Preferences::auto_update_hours`].
+    pub auto_update_hours: Option<u32>,
+    /// Unix seconds of the last refresh that worked, so the schedule survives a
+    /// relaunch instead of restarting its count every time the app opens.
+    pub last_refresh: Option<i64>,
+    /// The plan as it was last read, shown at launch before the network answers
+    /// — and while the service cannot.
+    pub cached_info: Option<SubscriptionInfo>,
+    /// The announcement the user put away. Per message: the next one is news by
+    /// definition, and shows again.
+    pub dismissed_announce: Option<String>,
+}
+
+/// The auto-update intervals on offer, in hours; 0 is off.
+pub const AUTO_UPDATE_CHOICES: [u32; 5] = [0, 1, 6, 12, 24];
+
+impl Preferences {
+    /// The effective auto-update interval in hours, 0 for off: the user's
+    /// choice, else what the service suggests, else a day — snapped to the
+    /// nearest one offered, so the switch always shows what will happen.
+    pub fn auto_update_hours(&self, suggested: Option<u32>) -> u32 {
+        let wanted = self.auto_update_hours.or(suggested).unwrap_or(24);
+        AUTO_UPDATE_CHOICES
+            .into_iter()
+            .min_by_key(|choice| choice.abs_diff(wanted))
+            .unwrap_or(24)
+    }
+
+    /// Whether a scheduled refresh is due at `now` (unix seconds).
+    pub fn refresh_due(&self, suggested: Option<u32>, now: i64) -> bool {
+        let hours = self.auto_update_hours(suggested);
+        hours > 0
+            && self.subscription_url.is_some()
+            && self
+                .last_refresh
+                .is_none_or(|last| now >= last + i64::from(hours) * 3600)
+    }
 }
 
 impl Default for Preferences {
@@ -84,6 +122,10 @@ impl Default for Preferences {
             api_secret: Uuid::new_v4().to_string(),
             controller_port: 9797,
             mixed_port: 7897,
+            auto_update_hours: None,
+            last_refresh: None,
+            cached_info: None,
+            dismissed_announce: None,
         }
     }
 }
@@ -128,6 +170,17 @@ pub fn core_data_directory() -> PathBuf {
 /// see as a core that never answered. One directory above is still outside.
 pub fn config_path() -> PathBuf {
     core_data_directory().join("core.yaml")
+}
+
+/// The subscription as the service last sent it, before this app's overrides.
+///
+/// Kept so a launch has something to run before the network answers — and
+/// something to run at all while the service cannot. It used to live only in
+/// memory, so a subscription server answering 502 left the app with no core,
+/// no probes and no way to connect, although the config from an hour earlier
+/// was sitting beside it and worked.
+pub fn subscription_path() -> PathBuf {
+    support_directory().join("subscription.yaml")
 }
 
 impl Preferences {
@@ -282,6 +335,26 @@ mod tests {
         let json = serde_json::to_string(&prefs).expect("serialises");
         let back: Preferences = serde_json::from_str(&json).expect("deserialises");
         assert_eq!(prefs, back);
+    }
+
+    #[test]
+    fn the_schedule_follows_the_user_then_the_service_then_a_day() {
+        let mut prefs = Preferences {
+            subscription_url: Some("https://example.com/sub/x".into()),
+            ..Default::default()
+        };
+        assert_eq!(prefs.auto_update_hours(None), 24);
+        // The service may suggest any number; it is snapped to one on offer.
+        assert_eq!(prefs.auto_update_hours(Some(5)), 6);
+        prefs.auto_update_hours = Some(0);
+        assert_eq!(prefs.auto_update_hours(Some(5)), 0, "the user's off wins");
+        assert!(!prefs.refresh_due(None, 1_000_000));
+
+        prefs.auto_update_hours = Some(1);
+        assert!(prefs.refresh_due(None, 1_000_000), "never refreshed is due");
+        prefs.last_refresh = Some(1_000_000);
+        assert!(!prefs.refresh_due(None, 1_000_000 + 3599));
+        assert!(prefs.refresh_due(None, 1_000_000 + 3600));
     }
 
     #[test]

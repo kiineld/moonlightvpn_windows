@@ -197,7 +197,7 @@ mod tests {
     fn a_failure_is_a_full_ring_in_the_danger_colour() {
         // Full, not empty: the shape says "there is a state here", the colour
         // says which one.
-        let (fraction, color) = dial(ConnectionState::Failed("x".into()), 0.0).sweep();
+        let (fraction, color) = dial(ConnectionState::Failed(moonlight_core::Issue::CoreFailed), 0.0).sweep();
         assert_eq!(fraction, 1.0);
         assert_eq!(color, Palette::DARK.danger);
     }
@@ -216,7 +216,7 @@ mod tests {
         for state in [
             ConnectionState::Disconnected,
             ConnectionState::Connecting,
-            ConnectionState::Failed("x".into()),
+            ConnectionState::Failed(moonlight_core::Issue::CoreFailed),
         ] {
             assert_eq!(
                 Dial::new(state, Palette::DARK, 0.5, 0.5).halo_opacity(),

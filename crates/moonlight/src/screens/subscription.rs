@@ -11,7 +11,7 @@ use moonlight_design::Icon;
 use crate::components;
 use crate::theme;
 use crate::localization::{t, S};
-use crate::{hspace, vspace, Message, Moonlight, Page, TELEGRAM_BOT_URL};
+use crate::{hspace, localization, vspace, Message, Moonlight, Page, CABINET_URL, TELEGRAM_BOT_URL};
 
 pub fn view(app: &Moonlight) -> Element<'_, Message> {
     let palette = app.palette_of();
@@ -33,14 +33,23 @@ pub fn view(app: &Moonlight) -> Element<'_, Message> {
         .into();
     }
 
-    row![
+    let columns = row![
         column![plan_card(app), traffic_card(app)]
             .spacing(16)
             .width(Length::FillPortion(1)),
         actions(app).width(Length::FillPortion(1)),
     ]
-    .spacing(20)
-    .into()
+    .spacing(20);
+
+    match app.announce() {
+        Some(message) => column![
+            components::announce_banner(message, Message::DismissAnnounce, palette),
+            columns,
+        ]
+        .spacing(14)
+        .into(),
+        None => columns.into(),
+    }
 }
 
 /// The lime plan card. Everything on it is ink on accent, which is why the
@@ -150,6 +159,17 @@ fn traffic_card(app: &Moonlight) -> Element<'_, Message> {
             .color(palette.text_muted),
         );
     }
+    if info.refill_date.is_some() {
+        content = content.push(
+            text(format!(
+                "{} {}",
+                t(S::TrafficResets, locale),
+                format::date(info.refill_date, locale)
+            ))
+            .size(scale::META)
+            .color(palette.text_muted),
+        );
+    }
 
     // A panel, not a card: `card` is surface-2, which in light mode is #F1F3EB
     // against a #F2F3ED page — a one-value difference nobody can see, so the
@@ -162,32 +182,38 @@ fn actions(app: &Moonlight) -> iced::widget::Column<'_, Message> {
     let palette = app.palette_of();
     let locale = app.locale_of();
 
+    // What the row says under its title: syncing, when it last worked, or
+    // what it offers. It used to say "just now" whether or not it ever had.
     let refreshed = if app.is_refreshing() {
-        t(S::Checking, locale)
+        t(S::RefreshMetaSyncing, locale).to_string()
     } else {
-        t(S::RefreshedJustNow, locale)
+        app.last_updated()
+            .unwrap_or_else(|| t(S::RefreshMetaIdle, locale).to_string())
     };
 
-    let url = app
-        .preferences()
-        .subscription_url
-        .clone()
-        .unwrap_or_default();
+    let mut refresh = column![components::surface(
+        components::action_row(
+            Icon::RefreshCw,
+            palette.accent,
+            palette.text_on_accent,
+            t(S::RefreshSubscription, locale).to_string(),
+            refreshed,
+            None,
+            Some(Message::Refresh),
+            palette,
+        ),
+        palette
+    )]
+    .spacing(10);
+    if let Some(issue) = app.refresh_issue() {
+        refresh = refresh.push(
+            container(components::issue_line(localization::issue(issue, locale), palette))
+                .padding([0, 6]),
+        );
+    }
 
     column![
-        components::surface(
-            components::action_row(
-                Icon::RefreshCw,
-                palette.accent,
-                palette.text_on_accent,
-                t(S::RefreshSubscription, locale).to_string(),
-                refreshed.to_string(),
-                None,
-                Some(Message::Refresh),
-                palette,
-            ),
-            palette
-        ),
+        refresh,
         components::surface(
             column![
                 components::action_row(
@@ -195,31 +221,37 @@ fn actions(app: &Moonlight) -> iced::widget::Column<'_, Message> {
                     palette.cat2,
                     palette.text_on_accent,
                     t(S::ExtendSubscription, locale).to_string(),
-                    t(S::OpensAccount, locale).to_string(),
+                    t(S::ExtendSubtitle, locale).to_string(),
                     // An outward-pointing mark, because this opens a browser —
                     // a chevron would promise another screen inside the app.
+                    // Always the bot: it is where a plan is paid for.
                     Some(Icon::ExternalLink),
                     Some(Message::OpenUrl(TELEGRAM_BOT_URL)),
                     palette,
                 ),
                 components::divider(palette),
                 components::action_row(
-                    Icon::Plus,
-                    palette.cat4,
+                    Icon::Globe,
+                    palette.cat3,
                     palette.text_on_accent,
-                    t(S::AddSubscription, locale).to_string(),
-                    t(S::PasteFromBot, locale).to_string(),
-                    Some(Icon::ChevronRight),
-                    Some(Message::Navigate(Page::Import)),
+                    t(S::PersonalAccount, locale).to_string(),
+                    t(S::PersonalAccountSub, locale).to_string(),
+                    Some(Icon::ExternalLink),
+                    Some(Message::OpenUrl(CABINET_URL)),
                     palette,
                 ),
+                // No "add a subscription" beside an active one: importing
+                // replaces it, so the row promised something the app does not
+                // do. Removing it brings the empty state and its add row back.
                 components::divider(palette),
                 components::action_row(
                     Icon::Trash2,
                     palette.danger,
                     palette.text_on_accent,
                     t(S::RemoveSubscription, locale).to_string(),
-                    url,
+                    // Never the link itself: it is a credential, and anyone
+                    // who reads it off the screen has the subscription.
+                    t(S::RemoveSubscriptionSub, locale).to_string(),
                     None,
                     Some(Message::RemoveSubscription),
                     palette,

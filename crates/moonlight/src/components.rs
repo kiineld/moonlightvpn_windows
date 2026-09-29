@@ -557,6 +557,56 @@ pub fn empty_state_full<'a, M: Clone + 'a>(
         .into()
 }
 
+/// The service's announcement, as it wrote it, with a cross to put it away.
+///
+/// Hidden per message: dismissing one does not hide the next, which is news by
+/// definition.
+pub fn announce_banner<'a, M: Clone + 'a>(
+    message: &'a str,
+    dismiss: M,
+    palette: Palette,
+) -> Element<'a, M> {
+    let close = button(icon(Icon::X, 14.0, palette.text_muted))
+        .on_press(dismiss)
+        .padding(4)
+        .style(move |_, status| theme::row_button(palette, false, status));
+    container(
+        row![
+            icon(Icon::MessageCircle, 17.0, palette.accent_ink),
+            text(message)
+                .size(13.0)
+                .font(moonlight_design::ui(EMPHATIC))
+                .color(palette.text)
+                .width(Length::Fill),
+            close,
+        ]
+        .spacing(12)
+        .align_y(Alignment::Start),
+    )
+    .padding([13, 16])
+    .width(Length::Fill)
+    .style(move |_| container::Style {
+        background: Some(Background::Color(palette.accent_quiet)),
+        border: Border {
+            radius: iced::border::Radius::from(radii::CARD),
+            ..Default::default()
+        },
+        ..Default::default()
+    })
+    .into()
+}
+
+/// One line for a problem, in the danger colour.
+pub fn issue_line<'a, M: 'a>(message: String, palette: Palette) -> Element<'a, M> {
+    row![
+        icon(Icon::CircleAlert, 15.0, palette.danger),
+        text(message).size(12.5).color(palette.danger),
+    ]
+    .spacing(8)
+    .align_y(Alignment::Start)
+    .into()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

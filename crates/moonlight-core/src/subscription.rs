@@ -36,18 +36,40 @@ use crate::mihomo_config;
 use crate::models::SubscriptionInfo;
 use crate::share_link;
 
+/// What went wrong, worded for a log line — the screen shows the app's own
+/// localised text for each case ([`crate::Issue`]), never these.
+///
+/// Nothing here names the service behind the link or repeats the link: the log
+/// is on screen too, and the link is a credential.
 #[derive(Debug, Error, PartialEq)]
 pub enum Failure {
     #[error("Subscription link is not a valid http(s) URL")]
     BadUrl,
-    #[error("Panel returned HTTP {0}")]
+    #[error("Subscription server returned HTTP {0}")]
     Http(u16),
-    #[error("Panel returned an empty subscription")]
+    #[error("Subscription is empty")]
     Empty,
     #[error("{0}")]
     Unusable(String),
-    #[error("Could not reach the panel: {0}")]
+    #[error("Could not reach the subscription server: {0}")]
     Transport(String),
+    /// The account is at its device limit. Remnawave answers this with a *200*
+    /// and an empty body, so without the header it read as an empty
+    /// subscription. Carries the service's own explanation, if it sent one.
+    #[error("Device limit reached for this subscription")]
+    DeviceLimit(Option<String>),
+    /// The service requires a device identifier this request did not pass.
+    #[error("Subscription requires a device identifier")]
+    DeviceNotSupported,
+}
+
+impl Failure {
+    /// An answer about the account rather than about one endpoint: every
+    /// endpoint would say the same, and trying the next one only turns a clear
+    /// answer into a vague one.
+    fn is_about_the_account(&self) -> bool {
+        matches!(self, Failure::DeviceLimit(_) | Failure::DeviceNotSupported)
+    }
 }
 
 /// Which endpoint answered — surfaced in the UI so a base64 fallback (with its
@@ -151,6 +173,7 @@ impl SubscriptionClient {
                         "{suffix} endpoint did not return a Clash config"
                     ));
                 }
+                Err(error) if error.is_about_the_account() => return Err(error),
                 Err(error) => last_error = error,
             }
         }
@@ -188,7 +211,7 @@ impl SubscriptionClient {
                     source: Source::ShareLinks,
                 })
             }
-            Err(error) => Err(if last_error == Failure::Empty {
+            Err(error) => Err(if last_error == Failure::Empty || error.is_about_the_account() {
                 error
             } else {
                 last_error
@@ -215,18 +238,28 @@ impl SubscriptionClient {
             return Err(Failure::Http(status.as_u16()));
         }
 
-        let info = info_from_headers(|name| {
+        let header = |name: &str| {
             response
                 .headers()
                 .get(name)
                 .and_then(|v| v.to_str().ok())
                 .map(str::to_string)
-        });
+        };
+        let info = info_from_headers(header);
+        // Checked before the body: at the limit the body is empty, or is a
+        // placeholder "node" whose name is the explanation.
+        let flag = |name: &str| header(name).is_some_and(|v| v.eq_ignore_ascii_case("true"));
+        if flag("x-hwid-max-devices-reached") {
+            return Err(Failure::DeviceLimit(info.announce));
+        }
+        if flag("x-hwid-not-supported") {
+            return Err(Failure::DeviceNotSupported);
+        }
 
         let body = response
             .text()
             .await
-            .map_err(|e| Failure::Transport(e.to_string()))?;
+            .map_err(|e| Failure::Transport(e.without_url().to_string()))?;
         if body.is_empty() {
             return Err(Failure::Empty);
         }
@@ -250,7 +283,9 @@ impl SubscriptionClient {
             )
             .send()
             .await
-            .map_err(|e| Failure::Transport(e.to_string()))
+            // Without the URL: reqwest's message quotes the request it failed,
+            // which is the subscription link, into a line that reaches the log.
+            .map_err(|e| Failure::Transport(e.without_url().to_string()))
     }
 }
 
@@ -298,15 +333,19 @@ pub fn looks_like_clash_config(body: &str) -> bool {
     })
 }
 
-/// Parses the two headers every panel implements consistently.
+/// Parses the headers a Remnawave subscription response carries.
 ///
 /// ```text
 /// subscription-userinfo: upload=0; download=0; total=0; expire=0
-/// profile-title: <utf8 or base64:…>
+/// profile-title, announce         text, plain or base64:<payload>
+/// profile-web-page-url, support-url   links
+/// profile-update-interval         hours
+/// subscription-refill-date        unix seconds of the next traffic reset
 /// ```
 ///
 /// A zero `total` or `expire` means *unlimited* in this format, not zero, so
-/// both map to `None` rather than to 0.
+/// both map to `None` rather than to 0. `content-disposition` names the account
+/// and `routing` is a profile for another client; neither is read.
 pub fn info_from_headers(header: impl Fn(&str) -> Option<String>) -> SubscriptionInfo {
     let mut info = SubscriptionInfo::default();
 
@@ -321,16 +360,32 @@ pub fn info_from_headers(header: impl Fn(&str) -> Option<String>) -> Subscriptio
                 "upload" => info.upload = value,
                 "download" => info.download = value,
                 "total" => info.total = value.filter(|v| *v > 0),
-                "expire" => info.expire = value.filter(|v| *v > 0),
+                "expire" => info.expire = value.filter(|v| *v > 0).and_then(expiry),
                 _ => {}
             }
         }
     }
 
-    if let Some(title) = header("profile-title") {
-        info.title = Some(decode_title(&title));
-    }
+    info.title = header("profile-title").and_then(|raw| text(&raw));
+    info.announce = header("announce").and_then(|raw| text(&raw));
+    info.web_page_url = header("profile-web-page-url").and_then(|raw| link(&raw, &["https", "http"]));
+    info.support_url = header("support-url")
+        .and_then(|raw| link(&raw, &["https", "http", "tg", "mailto"]));
+    info.update_interval_hours = header("profile-update-interval")
+        .and_then(|raw| raw.trim().parse::<u32>().ok())
+        .filter(|hours| *hours > 0);
+    info.refill_date = header("subscription-refill-date")
+        .and_then(|raw| raw.trim().parse::<i64>().ok())
+        .filter(|seconds| *seconds > 0);
     info
+}
+
+/// An expiry, or `None` for Remnawave's "never expires" — which it writes as a
+/// date in 2099 or 2100 rather than leaving the field out, in the `/info` JSON
+/// and in the header alike. Read literally, it was a plan with 26 892 days left.
+pub fn expiry(unix_seconds: i64) -> Option<i64> {
+    let year = OffsetDateTime::from_unix_timestamp(unix_seconds).ok()?.year();
+    (year < 2099).then_some(unix_seconds)
 }
 
 /// Remnawave's `/info` JSON. Only the fields the design shows are read; the rest
@@ -348,11 +403,9 @@ pub fn info_from_remnawave_json(body: &str) -> Option<SubscriptionInfo> {
         }
     };
 
+    // The account's username is deliberately not read: it is the service's
+    // handle for the user, not a plan name, and has no place on screen.
     let mut info = SubscriptionInfo {
-        title: user
-            .get("username")
-            .and_then(|v| v.as_str())
-            .map(str::to_string),
         download: number(user, "trafficUsed").or_else(|| number(user, "usedTrafficBytes")),
         ..Default::default()
     };
@@ -366,7 +419,7 @@ pub fn info_from_remnawave_json(body: &str) -> Option<SubscriptionInfo> {
     if let Some(expire) = user.get("expiresAt").and_then(|v| v.as_str()) {
         info.expire = OffsetDateTime::parse(expire, &Rfc3339)
             .ok()
-            .map(|d| d.unix_timestamp());
+            .and_then(|d| expiry(d.unix_timestamp()));
     }
     if let Some(limit) = number(user, "hwidDeviceLimit").filter(|v| *v > 0) {
         info.device_limit = Some(limit as u32);
@@ -388,22 +441,38 @@ pub fn merging(base: &SubscriptionInfo, other: &SubscriptionInfo) -> Subscriptio
         expire: other.expire.or(base.expire),
         device_limit: other.device_limit.or(base.device_limit),
         devices_used: other.devices_used.or(base.devices_used),
+        announce: other.announce.clone().or_else(|| base.announce.clone()),
+        web_page_url: other.web_page_url.clone().or_else(|| base.web_page_url.clone()),
+        support_url: other.support_url.clone().or_else(|| base.support_url.clone()),
+        update_interval_hours: other.update_interval_hours.or(base.update_interval_hours),
+        refill_date: other.refill_date.or(base.refill_date),
     }
 }
 
-fn decode_title(raw: &str) -> String {
-    // Panels send this either plain or as `base64:<payload>`.
-    if let Some(payload) = raw
-        .strip_prefix("base64:")
-        .or_else(|| raw.strip_prefix("BASE64:"))
-    {
-        if let Ok(bytes) = STANDARD.decode(payload) {
-            if let Ok(text) = String::from_utf8(bytes) {
-                return text;
-            }
-        }
-    }
-    raw.to_string()
+/// A text header, plain or `base64:<payload>` — which is how Remnawave renders
+/// any value its operator wrapped in `rwEncodeBase64:`. Tolerates the URL-safe
+/// alphabet and missing padding; an undecodable payload stays as it came.
+/// Empty reads as absent.
+fn text(raw: &str) -> Option<String> {
+    let raw = raw.trim();
+    let decoded = raw
+        .get(..7)
+        .filter(|prefix| prefix.eq_ignore_ascii_case("base64:"))
+        .and_then(|_| {
+            let mut payload = raw[7..].replace('-', "+").replace('_', "/");
+            payload.extend(std::iter::repeat_n('=', (4 - payload.len() % 4) % 4));
+            String::from_utf8(STANDARD.decode(payload).ok()?).ok()
+        });
+    let value = decoded.as_deref().unwrap_or(raw).trim();
+    (!value.is_empty()).then(|| value.to_string())
+}
+
+/// A link header, taken only with one of the expected schemes — the app opens
+/// these on a click, so a `file:` or custom-scheme value is dropped.
+fn link(raw: &str, schemes: &[&str]) -> Option<String> {
+    let value = text(raw)?;
+    let url = url::Url::parse(&value).ok()?;
+    schemes.contains(&url.scheme()).then_some(value)
 }
 
 #[cfg(test)]
@@ -568,7 +637,9 @@ mod tests {
             }
         }"#;
         let info = info_from_remnawave_json(body).expect("parses");
-        assert_eq!(info.title.as_deref(), Some("alice"));
+        // The username is the service's handle for the account, not a plan
+        // name, and never reaches the screen.
+        assert_eq!(info.title, None);
         assert_eq!(info.download, Some(1024));
         assert_eq!(info.total, Some(107_374_182_400));
         assert_eq!(info.device_limit, Some(3));
@@ -580,7 +651,7 @@ mod tests {
     fn remnawave_info_also_parses_without_the_wrapper() {
         let body = r#"{"username":"bob","usedTrafficBytes":50,"trafficLimitBytes":100}"#;
         let info = info_from_remnawave_json(body).expect("parses");
-        assert_eq!(info.title.as_deref(), Some("bob"));
+        assert_eq!(info.title, None);
         assert_eq!(info.download, Some(50));
         assert_eq!(info.total, Some(100));
     }
@@ -595,9 +666,9 @@ mod tests {
 
     #[test]
     fn unknown_json_fields_are_ignored_rather_than_fatal() {
-        let body = r#"{"response":{"user":{"username":"d","somethingNew":{"a":1}}}}"#;
+        let body = r#"{"response":{"user":{"trafficUsed":7,"somethingNew":{"a":1}}}}"#;
         let info = info_from_remnawave_json(body).expect("parses");
-        assert_eq!(info.title.as_deref(), Some("d"));
+        assert_eq!(info.download, Some(7));
     }
 
     #[test]
@@ -635,5 +706,65 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(merging(&base, &SubscriptionInfo::default()), base);
+    }
+
+    #[test]
+    fn every_remnawave_header_is_read() {
+        let info = info_from_headers(headers(&[
+            ("announce", &format!("base64:{}", STANDARD.encode("Плановые работы в 3:00"))),
+            ("profile-web-page-url", "https://example.com/renew"),
+            ("support-url", "tg://resolve?domain=support"),
+            ("profile-update-interval", "12"),
+            ("subscription-refill-date", "1893456000"),
+        ]));
+        assert_eq!(info.announce.as_deref(), Some("Плановые работы в 3:00"));
+        assert_eq!(info.web_page_url.as_deref(), Some("https://example.com/renew"));
+        assert_eq!(info.support_url.as_deref(), Some("tg://resolve?domain=support"));
+        assert_eq!(info.update_interval_hours, Some(12));
+        assert_eq!(info.refill_date, Some(1_893_456_000));
+    }
+
+    #[test]
+    fn base64_text_tolerates_the_url_safe_alphabet_and_missing_padding() {
+        // "Привет?>" encodes with both '+' and '/' in the standard alphabet.
+        let standard = STANDARD.encode("Привет?>");
+        let url_safe = standard.replace('+', "-").replace('/', "_").replace('=', "");
+        let info = info_from_headers(headers(&[("announce", &format!("BASE64:{url_safe}"))]));
+        assert_eq!(info.announce.as_deref(), Some("Привет?>"));
+    }
+
+    #[test]
+    fn a_link_header_with_an_unexpected_scheme_is_dropped() {
+        let info = info_from_headers(headers(&[
+            ("profile-web-page-url", "file:///C:/Windows/system32/calc.exe"),
+            ("support-url", "javascript:alert(1)"),
+        ]));
+        assert_eq!(info.web_page_url, None);
+        assert_eq!(info.support_url, None);
+    }
+
+    #[test]
+    fn never_expires_reads_as_no_expiry_in_both_sources() {
+        // 2099-12-31, which is how Remnawave writes "never".
+        let header = info_from_headers(headers(&[("subscription-userinfo", "expire=4102358400")]));
+        assert_eq!(header.expire, None);
+        let json = info_from_remnawave_json(r#"{"expiresAt":"2099-12-31T00:00:00.000Z"}"#)
+            .expect("parses");
+        assert_eq!(json.expire, None);
+        // A real date is left alone.
+        assert_eq!(expiry(1_893_456_000), Some(1_893_456_000));
+    }
+
+    #[test]
+    fn the_device_limit_is_an_issue_of_its_own_not_an_empty_subscription() {
+        use crate::Issue;
+        let announced = Failure::DeviceLimit(Some("Лимит 3 устройства".into()));
+        assert_eq!(
+            Issue::from(&announced),
+            Issue::DeviceLimit(Some("Лимит 3 устройства".into()))
+        );
+        assert!(announced.is_about_the_account());
+        assert_eq!(Issue::from(&Failure::Http(404)), Issue::LinkRejected);
+        assert_eq!(Issue::from(&Failure::Http(502)), Issue::ServerUnavailable(Some(502)));
     }
 }

@@ -165,6 +165,21 @@ pub struct SubscriptionInfo {
     pub device_limit: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub devices_used: Option<u32>,
+    /// The service's message to its users (`announce`), shown as written.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub announce: Option<String>,
+    /// Where the service renews the plan (`profile-web-page-url`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub web_page_url: Option<String>,
+    /// The service's support contact (`support-url`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub support_url: Option<String>,
+    /// How often the service suggests re-fetching (`profile-update-interval`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub update_interval_hours: Option<u32>,
+    /// Unix seconds of the next traffic reset (`subscription-refill-date`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub refill_date: Option<i64>,
 }
 
 impl SubscriptionInfo {
@@ -215,7 +230,7 @@ pub enum ConnectionState {
     Connecting,
     Connected,
     Disconnecting,
-    Failed(String),
+    Failed(crate::Issue),
 }
 
 impl ConnectionState {
@@ -435,6 +450,6 @@ mod tests {
         assert!(ConnectionState::Connecting.is_busy());
         assert!(ConnectionState::Disconnecting.is_busy());
         assert!(!ConnectionState::Connected.is_busy());
-        assert!(!ConnectionState::Failed("x".into()).is_busy());
+        assert!(!ConnectionState::Failed(crate::Issue::CoreFailed).is_busy());
     }
 }

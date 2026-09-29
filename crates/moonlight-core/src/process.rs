@@ -160,7 +160,9 @@ impl MihomoProcess {
     /// crash: the core keeps running and keeps answering its API with the
     /// interface never established, so every other signal says "connected"
     /// while no traffic moves.
-    pub fn tun_failure(log: &str) -> Option<String> {
+    ///
+    /// Returns the kind, for the screen, and a line for the log.
+    pub fn tun_failure(log: &str) -> Option<(crate::Issue, String)> {
         let line = log
             .lines()
             .rfind(|l| l.contains("Start TUN listening error"))?;
@@ -169,21 +171,23 @@ impl MihomoProcess {
         // routes auto-route wants. That is the common case by far, and the raw
         // message sends people looking for a bug in this app.
         if line.contains("file exists") || line.contains("add route") {
-            return Some(
+            return Some((
+                crate::Issue::RoutesTaken,
                 "Another VPN client already holds the system routes. \
                  Disconnect it and try again."
                     .to_string(),
-            );
+            ));
         }
         // The Windows-specific one: no adapter to drive.
         if line.contains("wintun") || line.contains("Wintun") {
-            return Some(
+            return Some((
+                crate::Issue::TunFailed,
                 "The Wintun adapter could not be created. \
                  Check that the app is running as Administrator."
                     .to_string(),
-            );
+            ));
         }
-        Some(line.trim().to_string())
+        Some((crate::Issue::TunFailed, line.trim().to_string()))
     }
 }
 
@@ -267,7 +271,8 @@ mod tests {
     fn a_route_collision_names_the_cause_rather_than_quoting_the_core() {
         let log = "ERRO Start TUN listening error: configure tun interface: \
                    add route: 1.0.0.0/8: file exists";
-        let failure = MihomoProcess::tun_failure(log).expect("detected");
+        let (issue, failure) = MihomoProcess::tun_failure(log).expect("detected");
+        assert_eq!(issue, crate::Issue::RoutesTaken);
         assert!(failure.contains("Another VPN client"));
         // The raw message sends people looking for a bug in this app.
         assert!(!failure.contains("1.0.0.0/8"));
@@ -276,7 +281,7 @@ mod tests {
     #[test]
     fn a_missing_adapter_points_at_the_privilege_it_needs() {
         let log = "ERRO Start TUN listening error: wintun: failed to create adapter";
-        let failure = MihomoProcess::tun_failure(log).expect("detected");
+        let (_, failure) = MihomoProcess::tun_failure(log).expect("detected");
         assert!(failure.contains("Administrator"));
     }
 
@@ -285,7 +290,7 @@ mod tests {
         // Better an unfamiliar message than a tunnel that silently routes
         // nothing while reporting success.
         let log = "ERRO Start TUN listening error: something entirely new";
-        let failure = MihomoProcess::tun_failure(log).expect("detected");
+        let (_, failure) = MihomoProcess::tun_failure(log).expect("detected");
         assert!(failure.contains("something entirely new"));
     }
 
@@ -295,7 +300,7 @@ mod tests {
         let log = "ERRO Start TUN listening error: add route: file exists\n\
                    INFO retrying\n\
                    ERRO Start TUN listening error: wintun: no adapter";
-        let failure = MihomoProcess::tun_failure(log).expect("detected");
+        let (_, failure) = MihomoProcess::tun_failure(log).expect("detected");
         assert!(failure.contains("Administrator"));
     }
 

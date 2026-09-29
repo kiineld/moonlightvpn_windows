@@ -265,21 +265,48 @@ rather than skipping one node.
 The subscription request carries Remnawave's device headers:
 
 ```
-x-hwid:         <random UUID, minted once, stored in preferences.json>
+x-hwid:         <derived from the machine, see hwid.rs>
 x-device-os:    Windows
 x-ver-os:       <system version>
 x-device-model: <machine model>
 ```
 
-The HWID is a **random UUID, not a hardware identifier**. It gives the panel a
-stable per-install handle for its device limit and carries no hardware identity
-off the machine.
+The HWID is the machine's `MachineGuid` hashed into a UUIDv5 under the app's own
+namespace, so a reinstall is the same device to the panel and the hardware's own
+identifier never leaves the machine.
 
-`subscription-userinfo` and `profile-title` response headers take precedence
-over `<url>/info`, field by field, because they are what every panel implements
-consistently. A missing field reads as *unknown* rather than zero — a plan whose
-panel omits `total` is unlimited, and showing "0 GB" for it would be a lie the
-user acts on.
+### Response headers
+
+Every Remnawave header is read, and takes precedence over `<url>/info` field by
+field: `subscription-userinfo`, `profile-title`, `announce` (a banner the user
+can put away, per message), `profile-web-page-url`, `support-url` (Support opens
+it when sent), `profile-update-interval` and `subscription-refill-date`. Text
+values may be plain or `base64:`; links are kept only with an expected scheme.
+A missing field reads as *unknown* rather than zero — a plan whose panel omits
+`total` is unlimited, and showing "0 GB" for it would be a lie the user acts on.
+"Never expires" (a date in 2099) reads as no expiry, in the header and in
+`/info` alike. The account's username is not read.
+
+At the device limit the panel answers **200 with an empty body** and
+`x-hwid-max-devices-reached: true`; that is reported as the limit, with the
+service's own `announce` when it sent one, not as an empty subscription.
+
+### Cache and auto-update
+
+The subscription as last fetched is kept in `subscription.yaml` beside the
+preferences, with the plan it described. Launch runs the core from it straight
+away, so the app connects whether or not the service answers today, and fetches
+again only when the schedule says so: off, or every 1/6/12/24 h, defaulting to
+the service's `profile-update-interval`. The app asks every five minutes, which
+also catches up after sleep. Every refresh reloads the running core. A new link
+replaces the current one only once it has loaded.
+
+### Nothing about the service on screen
+
+Errors reach the screen as typed issues (`issue.rs`) worded by the app in both
+languages — never "Panel returned HTTP 502". The log masks the subscription
+link, its host and token, and every server address (`redact.rs`), in the app's
+lines and the core's alike, and transport errors are logged without their URL.
 
 ### The subscription client ignores the system proxy
 
