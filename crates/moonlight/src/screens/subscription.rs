@@ -54,8 +54,9 @@ pub fn view(app: &Moonlight) -> Element<'_, Message> {
     }
 }
 
-/// The lime plan card. Everything on it is ink on accent, which is why the
-/// palette keeps `text_on_accent` as its own role rather than reusing `text`.
+/// The plan card, on the accent fill. Everything on it is ink on accent, which
+/// is why the palette keeps `text_on_accent` as its own role rather than
+/// reusing `text`.
 fn plan_card(app: &Moonlight) -> Element<'_, Message> {
     let palette = app.palette_of();
     let locale = app.locale_of();
@@ -66,10 +67,9 @@ fn plan_card(app: &Moonlight) -> Element<'_, Message> {
             text(t(label, locale))
                 .size(scale::MICRO)
                 .font(moonlight_design::ui(EMPHATIC))
-                // Dimmed dark ink, not `accent_ink_strong`. That role is lime in
-                // dark mode — invisible on this solid-lime hero, which is why the
-                // label vanished. Dark ink at 60% reads on both the lime and the
-                // yellow card, matching the macOS hero's own 0.6-opacity labels.
+                // Dimmed ink, not `accent_ink_strong`: that role is the fill's
+                // own colour, and would vanish on it. Ink at 60% matches the
+                // macOS hero's own 0.6-opacity labels.
                 .color(theme::alpha(palette.text_on_accent, 0.6)),
             text(value)
                 .font(moonlight_design::display())
@@ -224,7 +224,7 @@ fn actions(app: &Moonlight) -> iced::widget::Column<'_, Message> {
                 components::action_row(
                     Icon::Sparkles,
                     palette.cat2,
-                    palette.text_on_accent,
+                    palette.text,
                     t(S::ExtendSubscription, locale).to_string(),
                     t(S::ExtendSubtitle, locale).to_string(),
                     // An outward-pointing mark, because this opens a browser —
@@ -238,7 +238,7 @@ fn actions(app: &Moonlight) -> iced::widget::Column<'_, Message> {
                 components::action_row(
                     Icon::Globe,
                     palette.cat3,
-                    palette.text_on_accent,
+                    palette.text,
                     t(S::PersonalAccount, locale).to_string(),
                     t(S::PersonalAccountSub, locale).to_string(),
                     Some(Icon::ExternalLink),

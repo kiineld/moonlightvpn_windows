@@ -235,7 +235,7 @@ fn picker<'a>(app: &'a Moonlight, editor: &'a RuleEditor) -> Element<'a, Message
                 .width(Length::Fixed(22.0))
                 .height(Length::Fixed(22.0))
                 .into(),
-            None => components::letter_tile(&name, &executable, palette),
+            None => components::letter_tile(&name, palette),
         };
         button(
             row![

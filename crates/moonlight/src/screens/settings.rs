@@ -322,7 +322,7 @@ fn support(app: &Moonlight) -> Element<'_, Message> {
         components::action_row(
             Icon::Headphones,
             palette.cat4,
-            palette.text_on_accent,
+            palette.text,
             t(S::Support, locale).to_string(),
             t(S::SupportNote, locale).to_string(),
             Some(Icon::ExternalLink),
@@ -333,7 +333,7 @@ fn support(app: &Moonlight) -> Element<'_, Message> {
         components::action_row(
             Icon::CircleAlert,
             palette.cat3,
-            palette.text_on_accent,
+            palette.text,
             t(S::CoreLog, locale).to_string(),
             t(S::CoreLogNote, locale).to_string(),
             Some(Icon::ChevronRight),

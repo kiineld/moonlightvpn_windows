@@ -1,20 +1,15 @@
-//! Moonlight colour system — lime on slate.
+//! moonlight colour system — black and white.
 //!
-//! Mapped one-for-one from `tokens/colors.css`, and kept identical to the macOS
-//! client's `Palette.swift` so the two read as the same product. Base values
-//! first, then semantic aliases. Light mode is the same system flipped, with two
-//! deliberate departures the source calls out:
+//! The interface is monochrome, as the macOS client's `Palette.swift` is: a
+//! black canvas, near-black surfaces told apart by a step of grey and a
+//! hairline, white type, and white as the one interactive colour — black, in
+//! the light theme. Colour is spent in exactly two places: the logo's lime,
+//! which is the brand and appears nowhere else ([`Palette::brand`]), and the
+//! small signals that carry meaning — latency, errors, log levels.
 //!
-//! 1. The accent is **yellow**, not lime — acid lime on near-white neither fills
-//!    nor reads. Ink type stays on it, so the accent is a bright fill in both.
-//! 2. Category fills keep their dark-theme hues, because ink on a dark purple or
-//!    red slab fails contrast.
-//!
-//! The accent splits into four roles that must stay distinct, because light mode
-//! depends on it: [`Palette::accent`] fills, [`Palette::accent_ink`] is accent as
-//! type or a glyph, [`Palette::accent_ink_strong`] is accent type sitting *on* an
-//! accent wash, and [`Palette::accent_line`] is accent as a thin mark. In dark
-//! mode all four coincide.
+//! The token names are the ones every screen was written against; what they
+//! resolve to is what changed. `accent` fills, `accent_ink` is the accent as
+//! type or a glyph, `text_on_accent` sits on an accent fill.
 
 use iced::Color;
 
@@ -39,6 +34,9 @@ pub const fn hexa(value: u32, alpha: f32) -> Color {
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Palette {
+    // Brand — the logo, and nothing else
+    pub brand: Color,
+    pub brand_ink: Color,
     // Accents
     pub lime: Color,
     pub lime_deep: Color,
@@ -118,133 +116,138 @@ pub struct Palette {
 
 impl Palette {
     pub const DARK: Palette = Palette {
+        brand: hex(0xD2FF1F),
+        brand_ink: hex(0x0A0A0A),
+
         lime: hex(0xD2FF1F),
         lime_deep: hex(0xC2F015),
-        purple: hex(0xAB93E1),
-        yellow: hex(0xFFE078),
-        blue: hex(0xB6CAEB),
-        orange: hex(0xFB7A54),
-        red: hex(0xFF6B5A),
+        purple: hex(0x8A8A8A),
+        yellow: hex(0xFFD60A),
+        blue: hex(0xA3A3A3),
+        orange: hex(0xFF9F0A),
+        red: hex(0xFF453A),
 
-        lime_wash: hexa(0xD2FF1F, 0.13),
-        lime_wash_soft: hexa(0xD2FF1F, 0.06),
-        red_wash: hexa(0xFF6B5A, 0.13),
-        ink_wash: hexa(0x101828, 0.14),
-        ink_wash_soft: hexa(0x101828, 0.06),
-        hairline: hexa(0xFFFFFF, 0.09),
-        hairline_soft: hexa(0xFFFFFF, 0.05),
+        lime_wash: hexa(0xFFFFFF, 0.08),
+        lime_wash_soft: hexa(0xFFFFFF, 0.04),
+        red_wash: hexa(0xFF453A, 0.14),
+        ink_wash: hexa(0x000000, 0.10),
+        ink_wash_soft: hexa(0x000000, 0.05),
+        hairline: hexa(0xFFFFFF, 0.10),
+        hairline_soft: hexa(0xFFFFFF, 0.06),
 
-        bg: hex(0x101828),
-        bg_deep: hex(0x0B111E),
-        surface: hex(0x182131),
-        surface2: hex(0x212B3B),
-        surface3: hex(0x2A3547),
-        surface_nav: hexa(0x182131, 0.92),
+        bg: hex(0x0A0A0A),
+        bg_deep: hex(0x000000),
+        surface: hex(0x111111),
+        surface2: hex(0x1A1A1A),
+        surface3: hex(0x262626),
+        surface_nav: hex(0x0A0A0A),
 
-        text: hex(0xFFFFFF),
-        text2: hex(0xAEB7C7),
-        text_muted: hex(0x878EA8),
-        text_on_accent: hex(0x101828),
-        text_link: hex(0xD2FF1F),
-        text_link_hover: hex(0xE4FF6A),
+        text: hex(0xF5F5F5),
+        text2: hex(0xA3A3A3),
+        text_muted: hex(0x737373),
+        text_on_accent: hex(0x000000),
+        text_link: hex(0xF5F5F5),
+        text_link_hover: hex(0xFFFFFF),
 
-        accent: hex(0xD2FF1F),
-        accent_hover: hex(0xC2F015),
-        accent_quiet: hexa(0xD2FF1F, 0.13),
-        accent_ink: hex(0xD2FF1F),
-        accent_ink_strong: hex(0xD2FF1F),
-        accent_line: hex(0xD2FF1F),
+        accent: hex(0xFFFFFF),
+        accent_hover: hex(0xE5E5E5),
+        accent_quiet: hexa(0xFFFFFF, 0.08),
+        accent_ink: hex(0xFFFFFF),
+        accent_ink_strong: hex(0xFFFFFF),
+        accent_line: hexa(0xFFFFFF, 0.6),
 
-        status_secure: hex(0xD2FF1F),
-        danger: hex(0xFF6B5A),
-        danger_quiet: hexa(0xFF6B5A, 0.13),
-        warning: hex(0xFFE078),
-        info: hex(0xB6CAEB),
+        status_secure: hex(0xFFFFFF),
+        danger: hex(0xFF453A),
+        danger_quiet: hexa(0xFF453A, 0.14),
+        warning: hex(0xFFD60A),
+        info: hex(0xA3A3A3),
 
-        cat1: hex(0xD2FF1F),
-        cat2: hex(0xAB93E1),
-        cat3: hex(0xB6CAEB),
-        cat4: hex(0xFFE078),
-        cat5: hex(0xFB7A54),
-        hero_gold: hex(0xEFAE2E),
+        // Tiles behind a glyph: all one quiet grey now.
+        cat1: hex(0x1F1F1F),
+        cat2: hex(0x1F1F1F),
+        cat3: hex(0x1F1F1F),
+        cat4: hex(0x1F1F1F),
+        cat5: hex(0x1F1F1F),
+        hero_gold: hex(0xFFFFFF),
 
-        st_up: hex(0xD2FF1F),
-        st_up_ink: hex(0xD2FF1F),
-        st_degraded: hex(0xFFE078),
-        st_degraded_ink: hex(0xFFE078),
-        st_maintenance: hex(0xB6CAEB),
-        st_maintenance_ink: hex(0xB6CAEB),
-        st_partial: hex(0xFB7A54),
-        st_partial_ink: hex(0xFB7A54),
-        st_down: hex(0xFF6B5A),
-        st_down_ink: hex(0xFF6B5A),
+        st_up: hex(0x30D158),
+        st_up_ink: hex(0x30D158),
+        st_degraded: hex(0xFFD60A),
+        st_degraded_ink: hex(0xFFD60A),
+        st_maintenance: hex(0xA3A3A3),
+        st_maintenance_ink: hex(0xA3A3A3),
+        st_partial: hex(0xFF9F0A),
+        st_partial_ink: hex(0xFF9F0A),
+        st_down: hex(0xFF453A),
+        st_down_ink: hex(0xFF453A),
 
         telegram_blue: hex(0x29A0DA),
     };
 
     pub const LIGHT: Palette = Palette {
-        lime: hex(0xFFE078),
-        lime_deep: hex(0xF5CE52),
-        purple: hex(0xAB93E1),
-        yellow: hex(0xFFE078),
-        blue: hex(0xB6CAEB),
-        orange: hex(0xFB7A54),
-        red: hex(0xFF6B5A),
+        brand: hex(0xD2FF1F),
+        brand_ink: hex(0x0A0A0A),
 
-        lime_wash: hexa(0xB07908, 0.16),
-        lime_wash_soft: hexa(0xB07908, 0.07),
-        red_wash: hexa(0xFF6B5A, 0.13),
-        ink_wash: hexa(0x101828, 0.14),
-        ink_wash_soft: hexa(0x101828, 0.06),
-        hairline: hexa(0x101828, 0.11),
-        hairline_soft: hexa(0x101828, 0.06),
+        lime: hex(0xD2FF1F),
+        lime_deep: hex(0xC2F015),
+        purple: hex(0x737373),
+        yellow: hex(0xB58900),
+        blue: hex(0x525252),
+        orange: hex(0xC2410C),
+        red: hex(0xD70015),
 
-        bg: hex(0xF2F3ED),
-        bg_deep: hex(0xE6E8DF),
-        surface: hex(0xFFFFFF),
-        surface2: hex(0xF1F3EB),
-        surface3: hex(0xE1E4D9),
-        surface_nav: hexa(0xFFFFFF, 0.92),
+        lime_wash: hexa(0x000000, 0.06),
+        lime_wash_soft: hexa(0x000000, 0.03),
+        red_wash: hexa(0xD70015, 0.10),
+        ink_wash: hexa(0xFFFFFF, 0.16),
+        ink_wash_soft: hexa(0xFFFFFF, 0.08),
+        hairline: hexa(0x000000, 0.10),
+        hairline_soft: hexa(0x000000, 0.06),
 
-        text: hex(0x101828),
-        text2: hex(0x475467),
-        text_muted: hex(0x667085),
-        text_on_accent: hex(0x101828),
-        text_link: hex(0x7A5600),
-        text_link_hover: hex(0x5E4200),
+        bg: hex(0xFAFAFA),
+        bg_deep: hex(0xFFFFFF),
+        surface: hex(0xF5F5F5),
+        surface2: hex(0xEDEDED),
+        surface3: hex(0xE0E0E0),
+        surface_nav: hex(0xFAFAFA),
 
-        accent: hex(0xFFE078),
-        accent_hover: hex(0xF5CE52),
-        accent_quiet: hexa(0xB07908, 0.16),
-        accent_ink: hex(0xEFAE2E),
-        accent_ink_strong: hex(0x6B4A00),
-        accent_line: hex(0xEFAE2E),
+        text: hex(0x0A0A0A),
+        text2: hex(0x525252),
+        text_muted: hex(0x8A8A8A),
+        text_on_accent: hex(0xFFFFFF),
+        text_link: hex(0x0A0A0A),
+        text_link_hover: hex(0x000000),
 
-        status_secure: hex(0xFFE078),
-        danger: hex(0xFF6B5A),
-        danger_quiet: hexa(0xFF6B5A, 0.13),
-        warning: hex(0x9A6A00),
-        info: hex(0xB6CAEB),
+        accent: hex(0x0A0A0A),
+        accent_hover: hex(0x262626),
+        accent_quiet: hexa(0x000000, 0.06),
+        accent_ink: hex(0x0A0A0A),
+        accent_ink_strong: hex(0x0A0A0A),
+        accent_line: hexa(0x000000, 0.5),
 
-        // cat-4 is deepened so the yellow category stays distinct from the
-        // now-yellow accent.
-        cat1: hex(0xFFE078),
-        cat2: hex(0xAB93E1),
-        cat3: hex(0xB6CAEB),
-        cat4: hex(0xEFAE2E),
-        cat5: hex(0xFB7A54),
-        hero_gold: hex(0xFFE078),
+        status_secure: hex(0x0A0A0A),
+        danger: hex(0xD70015),
+        danger_quiet: hexa(0xD70015, 0.10),
+        warning: hex(0xB58900),
+        info: hex(0x525252),
 
-        st_up: hex(0xC2EA45),
-        st_up_ink: hex(0x4C7A0F),
-        st_degraded: hex(0xFFD75C),
-        st_degraded_ink: hex(0x9A6A00),
-        st_maintenance: hex(0xAFC9EE),
-        st_maintenance_ink: hex(0x3D6392),
-        st_partial: hex(0xFB9B7C),
+        cat1: hex(0xEDEDED),
+        cat2: hex(0xEDEDED),
+        cat3: hex(0xEDEDED),
+        cat4: hex(0xEDEDED),
+        cat5: hex(0xEDEDED),
+        hero_gold: hex(0x0A0A0A),
+
+        st_up: hex(0x248A3D),
+        st_up_ink: hex(0x248A3D),
+        st_degraded: hex(0xB58900),
+        st_degraded_ink: hex(0xB58900),
+        st_maintenance: hex(0x525252),
+        st_maintenance_ink: hex(0x525252),
+        st_partial: hex(0xC2410C),
         st_partial_ink: hex(0xC2410C),
-        st_down: hex(0xFF8A7A),
-        st_down_ink: hex(0xB42318),
+        st_down: hex(0xD70015),
+        st_down_ink: hex(0xD70015),
 
         telegram_blue: hex(0x29A0DA),
     };
@@ -285,6 +288,8 @@ impl Palette {
         }
 
         blend!(
+            brand,
+            brand_ink,
             lime,
             lime_deep,
             purple,
@@ -342,11 +347,13 @@ impl Palette {
         )
     }
 
-    /// The design keys ping colour off latency, not off a status enum.
+    /// Latency as a signal: fine, usable, slow. Tuned to what a tunnel out of
+    /// Russia actually measures — 40/100 ms steps painted every server there
+    /// the slow colour, which told nobody anything.
     pub fn ping_color(&self, ms: u32) -> Color {
-        if ms < 40 {
+        if ms < 150 {
             self.st_up_ink
-        } else if ms < 100 {
+        } else if ms < 300 {
             self.st_degraded_ink
         } else {
             self.st_partial_ink
@@ -397,16 +404,17 @@ mod tests {
     }
 
     #[test]
-    fn the_four_accent_roles_diverge_in_light_mode() {
-        // Dark collapses them; light must not, or accent type on an accent wash
-        // disappears.
-        let d = Palette::DARK;
-        assert_eq!(d.accent, d.accent_ink);
-        assert_eq!(d.accent, d.accent_ink_strong);
-
-        let l = Palette::LIGHT;
-        assert_ne!(l.accent, l.accent_ink);
-        assert_ne!(l.accent_ink, l.accent_ink_strong);
+    fn the_interface_is_black_and_white_and_the_lime_is_the_logos_alone() {
+        // White is the one interactive colour in the dark theme, black in the
+        // light one; the brand's lime is the same in both and nothing else
+        // carries it.
+        assert_eq!(Palette::DARK.accent, hex(0xFFFFFF));
+        assert_eq!(Palette::LIGHT.accent, hex(0x0A0A0A));
+        assert_eq!(Palette::DARK.brand, Palette::LIGHT.brand);
+        for palette in [Palette::DARK, Palette::LIGHT] {
+            assert_ne!(palette.accent, palette.brand);
+            assert_ne!(palette.bg, palette.brand);
+        }
     }
 
     #[test]
@@ -437,7 +445,7 @@ mod tests {
 
     #[test]
     fn a_half_lerp_sits_between_the_two_backgrounds() {
-        // #101828 to #F2F3ED: the midpoint must be neither end.
+        // #0A0A0A to #FAFAFA: the midpoint must be neither end.
         let middle = Palette::lerp(&Palette::DARK, &Palette::LIGHT, 0.5);
         assert!(middle.bg.r > Palette::DARK.bg.r);
         assert!(middle.bg.r < Palette::LIGHT.bg.r);
@@ -457,8 +465,9 @@ mod tests {
     fn ping_colour_is_keyed_off_latency() {
         let p = Palette::DARK;
         assert_eq!(p.ping_color(12), p.st_up_ink);
-        assert_eq!(p.ping_color(40), p.st_degraded_ink);
-        assert_eq!(p.ping_color(99), p.st_degraded_ink);
-        assert_eq!(p.ping_color(100), p.st_partial_ink);
+        assert_eq!(p.ping_color(149), p.st_up_ink);
+        assert_eq!(p.ping_color(150), p.st_degraded_ink);
+        assert_eq!(p.ping_color(299), p.st_degraded_ink);
+        assert_eq!(p.ping_color(300), p.st_partial_ink);
     }
 }

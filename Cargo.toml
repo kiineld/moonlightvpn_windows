@@ -78,6 +78,10 @@ features = [
     # Reading a programme's own icon out of its executable: SHGetFileInfoW hands
     # back an HICON, and turning one into pixels is GDI's job.
     "Win32_Graphics_Gdi",
+    # Mica and Acrylic behind the windows: DWM's backdrop attributes, and the
+    # margins that extend its frame over the client area.
+    "Win32_Graphics_Dwm",
+    "Win32_UI_Controls",
 ]
 
 [profile.release]

@@ -1,8 +1,9 @@
-//! The app mark: a crescent moon with two stars on an accent rounded square.
+//! The app mark: a crescent moon with two stars on a lime rounded square.
 //!
-//! Drawn rather than embedded as an image, for the same reason the icons are
-//! path data — it has to take the accent in both themes (lime on dark, yellow on
-//! light) and stay sharp on a 200% display without shipping four raster sizes.
+//! The lime is the brand, and this is the one place in the interface it
+//! appears ([`Palette::brand`]) — everything else is black and white. Drawn
+//! rather than embedded as an image so it stays sharp on a 200% display
+//! without shipping four raster sizes.
 //!
 //! The geometry is `assets/logo-tile.svg` verbatim, in its own 44×44 view box,
 //! and is the same path the macOS client draws. It is not redrawn by eye: an
@@ -70,9 +71,9 @@ impl<Message> canvas::Program<Message> for Logo {
                 Size::new(size, size),
                 self.radius.min(size / 2.0).into(),
             );
-            frame.fill(&slab, self.palette.accent);
+            frame.fill(&slab, self.palette.brand);
 
-            let ink = self.palette.text_on_accent;
+            let ink = self.palette.brand_ink;
             let box_rect = Rectangle::new(Point::ORIGIN, Size::new(size, size));
             frame.fill(
                 &SvgPath::parse(CRESCENT).to_canvas_path(box_rect, VIEW_BOX),

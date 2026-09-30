@@ -27,6 +27,17 @@ pub fn page(palette: Palette) -> container::Style {
     }
 }
 
+/// The window's canvas. Over Windows 11's Mica it is the canvas colour at three
+/// quarters, as the macOS client lays its canvas over the blurred desktop, so
+/// the material has light to show; without one it is solid.
+pub fn canvas(palette: Palette, backdrop: bool) -> container::Style {
+    let mut style = page(palette);
+    if backdrop {
+        style.background = Some(Background::Color(alpha(palette.bg, 0.75)));
+    }
+    style
+}
+
 /// A raised panel — the two big columns on the connect screen.
 pub fn panel(palette: Palette) -> container::Style {
     container::Style {
@@ -322,7 +333,7 @@ pub fn glow(color: Color) -> Shadow {
 }
 
 /// The one glow in the system, reserved for the status dot and other tiny accent
-/// marks — `--ml-glow-lime-sm`. Never for a panel: this is a flat system, where
+/// marks. Never for a panel: this is a flat system, where
 /// elevation is a surface's value rather than a blur.
 pub fn glow_sm(color: Color) -> Shadow {
     Shadow {
@@ -340,14 +351,15 @@ mod tests {
     use super::*;
 
     #[test]
-    fn the_accent_button_carries_ink_type_in_both_palettes() {
-        // The accent is a bright fill in both themes, so the text on it is
-        // always #101828 — never the theme's own text colour, which in dark
-        // mode is white on lime.
+    fn the_accent_button_carries_the_opposite_ink_in_both_palettes() {
+        // A white fill with black type in the dark theme, a black fill with
+        // white type in the light one — never the theme's own text colour,
+        // which is the fill's own.
         for palette in [Palette::DARK, Palette::LIGHT] {
             let style = accent_button(palette, button::Status::Active);
             assert_eq!(style.text_color, palette.text_on_accent);
-            assert_eq!(style.text_color, moonlight_design::palette::hex(0x101828));
+            assert_ne!(style.text_color, palette.accent);
+            assert_ne!(style.text_color, palette.text);
         }
     }
 

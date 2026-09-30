@@ -116,6 +116,10 @@ fn main() -> iced::Result {
         .title(Moonlight::title)
         .subscription(Moonlight::subscription)
         .theme(Moonlight::iced_theme)
+        // The window is cleared to nothing, not to iced's theme colour: the
+        // canvas paints itself, and over Mica it paints translucent — an opaque
+        // clear underneath would hide the material the canvas lets through.
+        .style(Moonlight::clear)
         .font(moonlight_design::FONT_BYTES[0])
         .font(moonlight_design::FONT_BYTES[1])
         .font(moonlight_design::FONT_BYTES[2])
@@ -339,6 +343,8 @@ pub enum Message {
     ToggleNotifications,
     /// Leave: put the machine back, then exit.
     Quit,
+    /// A window's native handle, once it exists, to ask for its backdrop.
+    WindowHandle(iced::window::Id, isize),
     /// Add the subscription the link carried — or try again.
     LinkAdd,
     LinkDismiss,
@@ -530,6 +536,10 @@ pub struct Moonlight {
     tray_blurred: Option<Instant>,
     /// A `moonlight://` link's question, while it is on screen.
     link_prompt: Option<LinkPrompt>,
+    /// The main window's handle, once Windows gave it Mica — the canvas is
+    /// painted translucent over it, and a theme change re-tints it. None on
+    /// Windows 10, where the canvas stays solid.
+    backdrop: Option<isize>,
 }
 
 impl Moonlight {
@@ -682,6 +692,7 @@ impl Moonlight {
             tray_search: String::new(),
             tray_blurred: None,
             link_prompt: None,
+            backdrop: None,
         }
     }
 
@@ -700,6 +711,13 @@ impl Moonlight {
             ConnectionState::Disconnected => t(S::StateDisconnected, self.locale()),
         };
         format!("{APP_NAME} · {state}")
+    }
+
+    fn clear(&self, _theme: &iced::Theme) -> iced::theme::Style {
+        iced::theme::Style {
+            background_color: iced::Color::TRANSPARENT,
+            text_color: self.palette().text,
+        }
     }
 
     fn iced_theme(&self, _window: iced::window::Id) -> iced::Theme {
@@ -722,6 +740,15 @@ impl Moonlight {
         };
         let linear = motion::progress(started.elapsed(), dur::PAINT);
         Palette::lerp(&previous, &target, Curve::EASE.at(linear))
+    }
+
+    /// Whether the theme is the dark one, whichever way it was chosen.
+    fn is_dark(&self) -> bool {
+        match self.preferences.appearance.as_deref() {
+            Some("dark") => true,
+            Some("light") => false,
+            _ => system_prefers_dark(),
+        }
     }
 
     /// Where the theme is heading, ignoring any fade in progress.
@@ -821,6 +848,15 @@ impl Moonlight {
                     Some("dark") => Some("light".into()),
                     _ => None,
                 };
+                // The material has its own dark and light tint, and keeps the
+                // one it was given until told otherwise.
+                if let Some(hwnd) = self.backdrop {
+                    moonlight_core::backdrop::apply(
+                        hwnd,
+                        moonlight_core::backdrop::Material::Mica,
+                        self.is_dark(),
+                    );
+                }
                 self.theme_started = Some(Instant::now());
                 self.save();
             }
@@ -1320,6 +1356,20 @@ impl Moonlight {
                 return self.update(Message::OpenMain);
             }
             Message::TogglePin => self.tray_pinned = !self.tray_pinned,
+            Message::WindowHandle(id, hwnd) => {
+                if hwnd != 0 && Some(id) == self.main_window {
+                    let took = moonlight_core::backdrop::apply(
+                        hwnd,
+                        moonlight_core::backdrop::Material::Mica,
+                        self.is_dark(),
+                    );
+                    self.backdrop = took.then_some(hwnd);
+                    self.logs.push(LogEntry::app(
+                        "INFO",
+                        format!("Window backdrop: {}", if took { "Mica" } else { "none" }),
+                    ));
+                }
+            }
             Message::TraySearch(value) => self.tray_search = value,
             Message::SetRoutingMode(mode) => {
                 self.preferences.routing_mode = mode;
@@ -1549,13 +1599,18 @@ impl Moonlight {
             size: iced::Size::new(1240.0, 820.0),
             position: iced::window::Position::Centered,
             decorations: false,
+            // Transparent, so Windows 11's Mica can show through the canvas.
+            transparent: true,
             // Alt+F4 arrives as a request, and goes to the tray like the ×.
             exit_on_close_request: false,
             ..Default::default()
         });
         self.main_window = Some(id);
         self.page_started = Some(Instant::now());
-        opened.map(|_| Message::Ignore)
+        Task::batch([
+            opened.map(|_| Message::Ignore),
+            iced::window::run(id, native_handle).map(move |hwnd| Message::WindowHandle(id, hwnd)),
+        ])
     }
 
     /// Opens the tray panel above the click, or closes it.
@@ -1859,7 +1914,10 @@ impl Moonlight {
         )
         .width(Length::Fill)
         .height(Length::Fill)
-        .style(move |_| theme::page(palette));
+        .style({
+            let backdrop = self.backdrop.is_some();
+            move |_| theme::canvas(palette, backdrop)
+        });
 
         // The resize edges go on last, over everything: an undecorated window
         // has no non-client area for Windows to hit-test, so the app owns its
@@ -1903,6 +1961,15 @@ fn drag_events(
             Some(Message::DragEnd)
         }
         _ => None,
+    }
+}
+
+/// A window's HWND, or 0 where there is none to be had.
+fn native_handle(window: &dyn iced::window::Window) -> isize {
+    use iced::window::raw_window_handle::RawWindowHandle;
+    match window.window_handle().map(|handle| handle.as_raw()) {
+        Ok(RawWindowHandle::Win32(handle)) => handle.hwnd.get(),
+        _ => 0,
     }
 }
 

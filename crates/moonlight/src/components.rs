@@ -30,30 +30,6 @@ const TOGGLE_H: f32 = 26.0;
 const TOGGLE_KNOB: f32 = 20.0;
 const TOGGLE_INSET: f32 = 3.0;
 
-/// The category ramp, in the order the tiles cycle through it.
-fn category_fills(palette: Palette) -> [Color; 5] {
-    [
-        palette.cat1,
-        palette.cat2,
-        palette.cat3,
-        palette.cat4,
-        palette.cat5,
-    ]
-}
-
-/// Which category colour an app row's tile takes.
-///
-/// Keyed off the executable rather than the display name, because that is the
-/// stable identity — a programme that renames itself between releases keeps its
-/// colour, and two builds of the same executable do not drift apart.
-fn tile_fill(executable: &str, palette: Palette) -> Color {
-    let fills = category_fills(palette);
-    let hash = executable
-        .bytes()
-        .fold(0u32, |a, b| a.wrapping_mul(31).wrapping_add(b as u32));
-    fills[(hash % fills.len() as u32) as usize]
-}
-
 /// A section heading: small, muted, letterspaced, upper case.
 ///
 /// The design sets these in caps in the string itself rather than through a
@@ -91,9 +67,9 @@ pub fn soft_divider<'a, M: 'a>(palette: Palette) -> Element<'a, M> {
 
 /// The rounded square that carries an icon at the head of a row.
 ///
-/// Its fill is a *category* colour, not the accent: the Subscription and
-/// Settings screens use five of them side by side, and making them all lime
-/// would lose the only thing distinguishing one action from the next.
+/// Its fill is the quiet tile grey with the glyph in the text colour; the
+/// row that is the screen's main action takes the accent fill instead, and a
+/// destructive one the danger fill.
 pub fn tile<'a, M: 'a>(glyph: Icon, fill: Color, ink: Color) -> Element<'a, M> {
     // 42×42 around a 19px glyph, cornered at 13 — the value the composition sets
     // literally for a tile this size, between `--ml-r-icon` and `--ml-r-icon-lg`.
@@ -110,28 +86,22 @@ pub fn tile<'a, M: 'a>(glyph: Icon, fill: Color, ink: Color) -> Element<'a, M> {
         .into()
 }
 
-/// The 42px tile at the head of an app row: the programme's initial, set in the
-/// display face on a category fill.
-///
-/// The composition hand-picks a colour per application, which a list of whatever
-/// is actually installed cannot do. The fill is chosen by hashing the executable
-/// instead, so a given programme keeps its colour between launches and between
-/// re-scans — a colour that moved every time the inventory was rebuilt would
-/// read as the list re-sorting itself.
-pub fn letter_tile<'a, M: 'a>(name: &str, executable: &str, palette: Palette) -> Element<'a, M> {
+/// The 42px tile at the head of an app row without an icon of its own: the
+/// programme's initial, set in the display face on the quiet tile grey.
+pub fn letter_tile<'a, M: 'a>(name: &str, palette: Palette) -> Element<'a, M> {
     let letter: String = name
         .chars()
         .find(|c| c.is_alphanumeric())
         .map(|c| c.to_uppercase().to_string())
         .unwrap_or_else(|| "?".into());
 
-    let fill = tile_fill(executable, palette);
+    let fill = palette.cat1;
 
     container(
         text(letter)
             .font(moonlight_design::display())
             .size(17.0)
-            .color(palette.text_on_accent),
+            .color(palette.text),
     )
     .center(Length::Fixed(42.0))
     .style(move |_| container::Style {
@@ -635,69 +605,6 @@ mod tests {
         assert_eq!(SUB_SIZE, 12.0);
         assert_eq!(scale::BODY, 15.0);
         assert_eq!(scale::META, 12.5);
-    }
-
-    #[test]
-    fn an_app_tile_keeps_its_colour_across_rescans() {
-        // The inventory is rebuilt on every scan; a fill that moved with it
-        // would read as the list re-sorting itself.
-        let palette = Palette::DARK;
-        assert_eq!(
-            tile_fill("chrome.exe", palette),
-            tile_fill("chrome.exe", palette)
-        );
-    }
-
-    #[test]
-    fn an_app_tile_only_ever_takes_a_category_colour() {
-        // Never the accent: a column of lime tiles loses the only thing telling
-        // one row from the next.
-        let palette = Palette::DARK;
-        let fills = category_fills(palette);
-        for executable in [
-            "chrome.exe",
-            "Telegram.exe",
-            "steam.exe",
-            "Code.exe",
-            "7zFM.exe",
-            "javacpl.exe",
-        ] {
-            let fill = tile_fill(executable, palette);
-            assert!(
-                fills.contains(&fill),
-                "{executable} took a colour outside the category ramp"
-            );
-        }
-    }
-
-    #[test]
-    fn the_category_ramp_spreads_across_a_real_inventory() {
-        // A hash that collapsed onto one colour would compile and look wrong.
-        let palette = Palette::DARK;
-        let names = [
-            "chrome.exe",
-            "Telegram.exe",
-            "steam.exe",
-            "Code.exe",
-            "7zFM.exe",
-            "javacpl.exe",
-            "Spotify.exe",
-            "zoom.exe",
-            "explorer.exe",
-            "notepad.exe",
-        ];
-        let mut seen: Vec<Color> = Vec::new();
-        for name in names {
-            let fill = tile_fill(name, palette);
-            if !seen.contains(&fill) {
-                seen.push(fill);
-            }
-        }
-        assert!(
-            seen.len() >= 3,
-            "ten programmes produced only {} distinct tile colours",
-            seen.len()
-        );
     }
 
     #[test]

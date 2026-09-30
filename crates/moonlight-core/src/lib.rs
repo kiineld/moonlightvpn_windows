@@ -6,6 +6,7 @@ pub mod api;
 pub mod app_icon;
 pub mod app_inventory;
 pub mod autostart;
+pub mod backdrop;
 pub mod controller;
 pub mod country;
 pub mod deeplink;
