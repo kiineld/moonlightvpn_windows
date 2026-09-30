@@ -112,6 +112,42 @@ pub fn progress(elapsed: Duration, duration: Duration) -> f32 {
     (elapsed.as_secs_f32() / duration.as_secs_f32()).clamp(0.0, 1.0)
 }
 
+/// The one spring everything that moves is on: SwiftUI's
+/// `spring(response: 0.5, dampingFraction: 0.9)`, the macOS client's
+/// `Motion.standard`. Damped just short of settling on its own, so it eases in
+/// and lands without an overshoot anyone can see — the bézier curves above
+/// overshoot on purpose, and a bounce reads as a toy.
+pub mod spring {
+    use std::time::Duration;
+
+    /// The standard response, in seconds.
+    pub const STANDARD: f32 = 0.5;
+    /// The sidebar selection's two edges: the one heading for the new row
+    /// leads on the quick spring, the other follows on the slower one, so the
+    /// selection stretches towards where it is going and gathers on arrival.
+    pub const LEAD: f32 = 0.26;
+    pub const TRAIL: f32 = 0.44;
+    pub const DAMPING: f32 = 0.9;
+    /// How long until the standard spring is still to the eye, within a
+    /// thousandth of its travel; the quicker ones are there sooner.
+    pub const SETTLE: Duration = Duration::from_millis(720);
+
+    /// How far along a spring with this response is, `t` seconds in: 0 at the
+    /// start, 1 once settled.
+    pub fn at(t: f32, response: f32) -> f32 {
+        if t <= 0.0 {
+            return 0.0;
+        }
+        if t >= SETTLE.as_secs_f32() {
+            return 1.0;
+        }
+        let omega = std::f32::consts::TAU / response;
+        let decay = DAMPING * omega;
+        let ringing = omega * (1.0 - DAMPING * DAMPING).sqrt();
+        1.0 - (-decay * t).exp() * ((ringing * t).cos() + decay / ringing * (ringing * t).sin())
+    }
+}
+
 // Press scales — the whole system uses exactly these three.
 pub const PRESS_CARD: f32 = 0.985;
 pub const PRESS_BUTTON: f32 = 0.97;
@@ -207,6 +243,23 @@ pub mod metrics {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_spring_lands_without_a_visible_overshoot() {
+        let mut t = 0.0;
+        let mut last = 0.0;
+        while t < 1.0 {
+            let at = spring::at(t, spring::STANDARD);
+            assert!(at <= 1.002, "{at} at {t}s is past where it lands");
+            // It never turns back on the way in.
+            assert!(at >= last - 0.002, "{at} at {t}s went back from {last}");
+            last = at;
+            t += 0.005;
+        }
+        assert_eq!(spring::at(0.0, spring::STANDARD), 0.0);
+        assert!(spring::at(0.7, spring::STANDARD) > 0.997);
+        assert!(spring::at(0.2, spring::LEAD) > spring::at(0.2, spring::TRAIL));
+    }
 
     #[test]
     fn curves_are_pinned_at_both_ends() {

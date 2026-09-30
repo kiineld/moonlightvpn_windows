@@ -28,7 +28,7 @@ use moonlight_core::subscription::Source;
 use moonlight_core::{
     AppEntry, AppLocale, ConnectionState, Issue, Node, SubscriptionInfo, TunnelMode,
 };
-use moonlight_design::motion::{self, dur, Curve};
+use moonlight_design::motion::{self, dur, spring, Curve};
 use moonlight_design::{Appearance, Palette};
 
 use localization::{t, S};
@@ -521,6 +521,9 @@ pub struct Moonlight {
     page_started: Option<Instant>,
     /// When the rail last started opening or closing, for its width glide.
     sidebar_started: Option<Instant>,
+    /// Where the sidebar's selection set off from — its top and bottom edges,
+    /// in rows — and when.
+    rail_moved: Option<(f32, f32, Instant)>,
     /// When the theme last changed, and the colours it was showing at the time.
     theme_started: Option<Instant>,
     previous_palette: Option<Palette>,
@@ -545,6 +548,8 @@ pub struct Moonlight {
     /// icon takes focus from the panel first, so without this the click that
     /// meant "close" closed it and then opened it again.
     tray_blurred: Option<Instant>,
+    /// Windows gave the tray panel its Acrylic, so it is painted translucent.
+    tray_backdrop: bool,
     /// A `moonlight://` link's question, while it is on screen.
     link_prompt: Option<LinkPrompt>,
     /// The main window's handle, once Windows gave it Mica — the canvas is
@@ -694,6 +699,7 @@ impl Moonlight {
             // being simply present when the window appears.
             page_started: Some(Instant::now()),
             sidebar_started: None,
+            rail_moved: None,
             theme_started: None,
             previous_palette: None,
             flags: available_flags(),
@@ -704,6 +710,7 @@ impl Moonlight {
             tray_pinned: false,
             tray_search: String::new(),
             tray_blurred: None,
+            tray_backdrop: false,
             link_prompt: None,
             backdrop: None,
         }
@@ -784,20 +791,54 @@ impl Moonlight {
         }
     }
 
-    /// 0…1 through the current transition.
-    /// How far a screen is through its entrance, eased.
+    /// How far a screen still has to rise as it arrives: every page the same
+    /// way, title included, on the one spring.
     ///
-    /// The design's `ml-rise` is an 18px lift paired with a fade. iced has no
-    /// opacity for an arbitrary element — only images and SVGs carry one — so
-    /// this is the lift alone rather than a fade faked by threading an alpha
-    /// through every colour on every screen.
+    /// 8px, as the macOS client travels: a page settles into place rather than
+    /// flying in. iced has no opacity for an arbitrary element — only images
+    /// and SVGs carry one — so this is the lift alone rather than a fade faked
+    /// by threading an alpha through every colour on every screen.
     fn page_rise(&self) -> f32 {
-        const TRAVEL: f32 = 18.0;
+        const TRAVEL: f32 = 8.0;
         let Some(started) = self.page_started else {
             return 0.0;
         };
-        let linear = motion::progress(started.elapsed(), dur::ENTER);
-        TRAVEL * (1.0 - Curve::RISE.at(linear))
+        TRAVEL * (1.0 - spring::at(started.elapsed().as_secs_f32(), spring::STANDARD))
+    }
+
+    /// Shows `page`: its entrance, and the sidebar's selection flowing to its
+    /// row when that changes.
+    fn go_to(&mut self, page: Page) {
+        if page.rail_item() != self.page.rail_item() {
+            let (top, bottom) = self.selection();
+            self.rail_moved = Some((top, bottom, Instant::now()));
+        }
+        self.page = page;
+        self.page_started = Some(Instant::now());
+    }
+
+    /// The sidebar selection's top and bottom edges, in rows: level once it
+    /// has arrived, apart while it flows. The edge heading for the new row
+    /// leads on the quick spring and the other follows, so the selection
+    /// stretches towards where it is going and gathers itself on arrival.
+    fn selection(&self) -> (f32, f32) {
+        let to = Page::SIDEBAR
+            .iter()
+            .position(|page| *page == self.page.rail_item())
+            .unwrap_or(0) as f32;
+        let Some((top, bottom, at)) = self.rail_moved else {
+            return (to, to);
+        };
+        let t = at.elapsed().as_secs_f32();
+        let (top_response, bottom_response) = if to > top {
+            (spring::TRAIL, spring::LEAD)
+        } else {
+            (spring::LEAD, spring::TRAIL)
+        };
+        (
+            top + (to - top) * spring::at(t, top_response),
+            bottom + (to - bottom) * spring::at(t, bottom_response),
+        )
     }
 
     /// The rail's width part-way through opening or closing.
@@ -811,8 +852,7 @@ impl Moonlight {
         let Some(started) = self.sidebar_started else {
             return to;
         };
-        let linear = motion::progress(started.elapsed(), dur::SLIDE);
-        from + (to - from) * Curve::SLIDE.at(linear)
+        from + (to - from) * spring::at(started.elapsed().as_secs_f32(), spring::STANDARD)
     }
 
     /// Whether anything is mid-animation, so the subscription knows to keep
@@ -821,8 +861,9 @@ impl Moonlight {
         let running = |started: Option<Instant>, duration: Duration| {
             started.is_some_and(|at| at.elapsed() < duration)
         };
-        running(self.page_started, dur::ENTER)
-            || running(self.sidebar_started, dur::SLIDE)
+        running(self.page_started, spring::SETTLE)
+            || running(self.sidebar_started, spring::SETTLE)
+            || running(self.rail_moved.map(|(_, _, at)| at), spring::SETTLE)
             || running(self.theme_started, dur::PAINT)
             || self.drawer.moving()
             || self.phase.moving()
@@ -834,8 +875,7 @@ impl Moonlight {
                 // Re-entering the page you are already on should not replay the
                 // entrance: it reads as the app having lost its place.
                 if self.page != page {
-                    self.page = page;
-                    self.page_started = Some(Instant::now());
+                    self.go_to(page);
                     if page != Page::Import {
                         self.importing = false;
                         self.import_done = false;
@@ -1218,8 +1258,7 @@ impl Moonlight {
                 };
             }
             Message::OpenUpdate => {
-                self.page = Page::Settings;
-                self.page_started = Some(Instant::now());
+                self.go_to(Page::Settings);
                 self.update_banner_hidden = true;
                 return Task::batch([self.update(Message::StartUpdate), self.open_main()]);
             }
@@ -1366,8 +1405,7 @@ impl Moonlight {
                 return Task::batch([close_tray, self.open_main()]);
             }
             Message::OpenPage(page) => {
-                self.page = page;
-                self.page_started = Some(Instant::now());
+                self.go_to(page);
                 return self.update(Message::OpenMain);
             }
             Message::TogglePin => self.tray_pinned = !self.tray_pinned,
@@ -1382,6 +1420,26 @@ impl Moonlight {
                     self.logs.push(LogEntry::app(
                         "INFO",
                         format!("Window backdrop: {}", if took { "Mica" } else { "none" }),
+                    ));
+                } else if hwnd != 0 && Some(id) == self.tray_window {
+                    // Acrylic rather than Mica: the panel is transient, and
+                    // blurs what is live behind it as the system's own
+                    // flyouts do.
+                    self.tray_backdrop = moonlight_core::backdrop::apply(
+                        hwnd,
+                        moonlight_core::backdrop::Material::Acrylic,
+                        self.is_dark(),
+                    );
+                    self.logs.push(LogEntry::app(
+                        "INFO",
+                        format!(
+                            "Tray backdrop: {}",
+                            if self.tray_backdrop {
+                                "Acrylic"
+                            } else {
+                                "none"
+                            }
+                        ),
                     ));
                 }
             }
@@ -1514,8 +1572,7 @@ impl Moonlight {
                     self.link_prompt = match &outcome {
                         Ok(()) => {
                             self.refresh_issue = None;
-                            self.page = Page::Connect;
-                            self.page_started = Some(Instant::now());
+                            self.go_to(Page::Connect);
                             None
                         }
                         Err(issue) => Some(LinkPrompt::Failed(link, issue.clone())),
@@ -1627,10 +1684,11 @@ impl Moonlight {
         });
         self.main_window = Some(id);
         self.page_started = Some(Instant::now());
-        Task::batch([
-            opened.map(|_| Message::Ignore),
-            iced::window::run(id, native_handle).map(move |hwnd| Message::WindowHandle(id, hwnd)),
-        ])
+        // The handle is asked for once the window exists: asked for alongside
+        // the open, the request can arrive first and is dropped.
+        opened
+            .then(move |_| iced::window::run(id, native_handle))
+            .map(move |hwnd| Message::WindowHandle(id, hwnd))
     }
 
     /// Opens the tray panel above the click, or closes it.
@@ -1667,6 +1725,7 @@ impl Moonlight {
             ),
             decorations: false,
             resizable: false,
+            transparent: true,
             level: iced::window::Level::AlwaysOnTop,
             exit_on_close_request: false,
             platform_specific: iced::window::settings::PlatformSpecific {
@@ -1676,8 +1735,11 @@ impl Moonlight {
             ..Default::default()
         });
         self.tray_window = Some(id);
+        self.tray_backdrop = false;
         Task::batch([
-            opened.map(|_| Message::Ignore),
+            opened
+                .then(move |_| iced::window::run(id, native_handle))
+                .map(move |hwnd| Message::WindowHandle(id, hwnd)),
             iced::window::gain_focus(id),
         ])
     }
@@ -1882,6 +1944,7 @@ impl Moonlight {
                 palette,
                 locale,
                 self.page.rail_item(),
+                self.selection(),
                 rail,
                 &self.preferences,
                 &self.info,
@@ -2037,12 +2100,12 @@ impl Glide {
         let Some(started) = self.started else {
             return self.to;
         };
-        let t = Curve::EASE.at(motion::progress(started.elapsed(), dur::SLIDE));
+        let t = spring::at(started.elapsed().as_secs_f32(), spring::STANDARD);
         self.from + (self.to - self.from) * t
     }
 
     fn moving(&self) -> bool {
-        self.started.is_some_and(|at| at.elapsed() < dur::SLIDE)
+        self.started.is_some_and(|at| at.elapsed() < spring::SETTLE)
     }
 
     fn go(&mut self, to: f32) {
@@ -2616,6 +2679,9 @@ impl Moonlight {
             .is_busy()
             .then(|| (self.started.elapsed().as_secs_f32() % TURN) / TURN)
     }
+    pub fn tray_backdrop(&self) -> bool {
+        self.tray_backdrop
+    }
     pub fn tun_awaiting_helper(&self) -> bool {
         self.tun_awaiting_helper
     }
@@ -2769,6 +2835,21 @@ mod tests {
         assert_eq!(app.phase.to, 1.0);
         let _ = app.apply(Event::State(ConnectionState::Disconnected));
         assert_eq!(app.phase.to, 0.0);
+    }
+
+    #[test]
+    fn the_selection_stretches_towards_its_new_row_and_gathers_there() {
+        let mut app = app();
+        assert_eq!(app.selection(), (0.0, 0.0));
+        app.go_to(Page::Settings);
+        assert!(app.rail_moved.is_some());
+        // A moment in, heading down: the bottom edge has gone further.
+        app.rail_moved = Some((0.0, 0.0, Instant::now() - Duration::from_millis(120)));
+        let (top, bottom) = app.selection();
+        assert!(bottom > top + 0.3, "{top}..{bottom} is not stretched");
+        assert!(bottom < 4.0);
+        app.rail_moved = Some((0.0, 0.0, Instant::now() - Duration::from_secs(2)));
+        assert_eq!(app.selection(), (4.0, 4.0));
     }
 
     #[test]

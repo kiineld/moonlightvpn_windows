@@ -78,6 +78,8 @@ pub struct Palette {
     pub accent_ink: Color,
     pub accent_ink_strong: Color,
     pub accent_line: Color,
+    /// The sidebar's selected row: a step up from the panel it sits on.
+    pub selection: Color,
 
     // Status
     pub status_secure: Color,
@@ -155,6 +157,7 @@ impl Palette {
         accent_ink: hex(0xFFFFFF),
         accent_ink_strong: hex(0xFFFFFF),
         accent_line: hexa(0xFFFFFF, 0.6),
+        selection: hex(0x262626),
 
         status_secure: hex(0xFFFFFF),
         danger: hex(0xFF453A),
@@ -224,6 +227,7 @@ impl Palette {
         accent_ink: hex(0x0A0A0A),
         accent_ink_strong: hex(0x0A0A0A),
         accent_line: hexa(0x000000, 0.5),
+        selection: hex(0xFFFFFF),
 
         status_secure: hex(0x0A0A0A),
         danger: hex(0xD70015),
@@ -322,6 +326,7 @@ impl Palette {
             accent_ink,
             accent_ink_strong,
             accent_line,
+            selection,
             status_secure,
             danger,
             danger_quiet,

@@ -44,6 +44,9 @@ pub const TAB_OVERLAP: f32 = 2.5;
 /// The gap between the panel and the window's edges.
 pub const INSET: f32 = 10.0;
 
+/// The gap between the rows.
+const NAV_GAP: f32 = 6.0;
+
 /// Where the rail swaps between its two layouts, mid-glide.
 ///
 /// The layout follows the *drawn width*, not the target state. Switching on the
@@ -58,6 +61,9 @@ pub fn view<'a>(
     palette: Palette,
     locale: AppLocale,
     current: Page,
+    // The selection's top and bottom edges, in rows, apart while it flows
+    // from one row to another.
+    selection: (f32, f32),
     // The rail's current width, which is mid-glide while it opens or closes.
     width: f32,
     preferences: &'a Preferences,
@@ -66,10 +72,40 @@ pub fn view<'a>(
     let collapsed = width < LAYOUT_SWAP;
     let pad_x = if collapsed { 10.0 } else { 14.0 };
 
-    let mut items = column![].spacing(6);
+    let mut items = column![].spacing(NAV_GAP);
     for page in Page::SIDEBAR {
         items = items.push(nav_item(palette, locale, page, current, collapsed));
     }
+    // The selection is its own piece, under the rows rather than the selected
+    // row's fill, so it can flow from one to the next.
+    let (top, bottom) = selection;
+    let pitch = metrics::NAV_ROW + NAV_GAP;
+    let mark = container(vspace(Length::Fixed(
+        (bottom - top) * pitch + metrics::NAV_ROW,
+    )))
+    .width(if collapsed {
+        Length::Fixed(metrics::NAV_ROW)
+    } else {
+        Length::Fill
+    })
+    .style(move |_| container::Style {
+        background: Some(Background::Color(palette.selection)),
+        border: Border {
+            radius: iced::border::Radius::from(radii::PILL),
+            width: border::HAIRLINE,
+            color: palette.hairline,
+        },
+        ..Default::default()
+    });
+    // A stack takes its size from its first layer, so the selection's layer
+    // is given the rows' full height rather than only reaching down to itself.
+    let rows = Page::SIDEBAR.len() as f32;
+    let items = iced::widget::stack![
+        column![vspace(Length::Fixed(top * pitch)), mark]
+            .align_x(Alignment::Center)
+            .height(Length::Fixed(rows * pitch - NAV_GAP)),
+        items,
+    ];
 
     let content = column![
         header(palette, collapsed),
@@ -248,10 +284,11 @@ fn nav_item<'a>(
     collapsed: bool,
 ) -> Element<'a, Message> {
     let selected = page == current;
-    // On the accent fill the glyph takes ink, not the accent — the same rule
-    // the type follows.
+    // The selection under the row is a quiet step up, not the accent, so the
+    // type keeps its own colour and only brightens: an inverted label would be
+    // unreadable while the selection is still on its way to it.
     let ink = if selected {
-        palette.text_on_accent
+        palette.text
     } else {
         palette.text2
     };
@@ -274,11 +311,11 @@ fn nav_item<'a>(
     };
 
     let styled = move |_: &_, status| {
+        let mut style = theme::nav_button(palette, status);
         if selected {
-            theme::accent_button(palette, status)
-        } else {
-            theme::nav_button(palette, status)
+            style.background = None;
         }
+        style
     };
 
     // Collapsed, the item is a fixed square centred in the rail: a pill radius on

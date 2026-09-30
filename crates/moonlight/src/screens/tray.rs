@@ -63,7 +63,10 @@ pub fn view(app: &Moonlight) -> Element<'_, Message> {
     )
     .width(Length::Fill)
     .height(Length::Fill)
-    .style(move |_| theme::page(palette))
+    .style({
+        let backdrop = app.tray_backdrop();
+        move |_| theme::canvas(palette, backdrop)
+    })
     .into()
 }
 
