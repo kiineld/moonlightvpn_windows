@@ -161,16 +161,28 @@ jobs:
             Unsigned, so SmartScreen will warn on first run: **More info →
             Run anyway**.
 
-            Everything is wired: the tunnel controller drives the core, writes
-            the proxy settings and talks to the helper, and all seven screens
-            are real. The interface has now been driven on real Windows
-            hardware and corrected against the macOS client screen by screen.
+            Brought level with the macOS client:
 
-            What still has not happened is a **live tunnel**: CI exercises the
-            registry, the service, the named pipe and a real mihomo core on a
-            Windows runner, but no session has been left connected carrying a
-            machine's own traffic, and TUN has never created a Wintun adapter.
-            See *What is not done yet* in the README.
+            - A new look: black and white, with the lime kept to the logo;
+              Mica behind the window on Windows 11, and Acrylic behind the tray
+              panel.
+            - The connect page is the moon from the logo, the time connected,
+              a Proxy/TUN switch and a drawer of servers.
+            - A rules page in place of the apps screen: rules by domain, IP,
+              process and more, ahead of the subscription's own or after them.
+            - A tray panel with the state, speeds, routing mode and a
+              searchable server list; closing the window keeps the app in the
+              tray.
+            - `moonlight://` links add a subscription, after asking.
+            - A new version is announced when the app opens and installs from
+              the banner, checked against the release's checksums first.
+            - What the subscription service sends — its message, the expiry,
+              the device limit — is read and shown; links, servers and
+              accounts never are.
+
+            TUN has still not carried a real machine's traffic: CI installs the
+            helper service and talks to it over its pipe, but has never brought
+            up a Wintun adapter.
 
             | File | |
             |---|---|
