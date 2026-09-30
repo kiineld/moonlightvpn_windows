@@ -146,7 +146,8 @@ pub fn encode_response(response: &Response) -> String {
     line
 }
 
-#[cfg(windows)]
+// The same names on every platform, so the controller compiles everywhere;
+// off Windows they answer that there is no helper.
 pub use client::*;
 
 #[cfg(windows)]
@@ -328,9 +329,6 @@ mod client {
         Err("The privileged helper exists only on Windows".to_string())
     }
 }
-
-#[cfg(not(windows))]
-pub use client::{is_installed, send};
 
 #[cfg(test)]
 mod tests {

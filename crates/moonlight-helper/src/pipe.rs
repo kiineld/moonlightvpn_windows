@@ -44,7 +44,9 @@
 use std::io::{BufRead, BufReader, Read, Write};
 
 use windows::core::{HSTRING, PCWSTR};
-use windows::Win32::Foundation::{CloseHandle, LocalFree, HANDLE, HLOCAL, INVALID_HANDLE_VALUE};
+use windows::Win32::Foundation::{
+    CloseHandle, LocalFree, ERROR_PIPE_CONNECTED, HANDLE, HLOCAL, INVALID_HANDLE_VALUE,
+};
 use windows::Win32::Security::Authorization::{
     ConvertStringSecurityDescriptorToSecurityDescriptorW, SDDL_REVISION_1,
 };
@@ -164,8 +166,7 @@ where
             continue;
         }
 
-        let connected = unsafe { ConnectNamedPipe(pipe, None) }.is_ok();
-        if connected {
+        if accepted(unsafe { ConnectNamedPipe(pipe, None) }) {
             handle_connection(pipe, &mut handle_request);
         }
 
@@ -173,6 +174,21 @@ where
             let _ = DisconnectNamedPipe(pipe);
             let _ = CloseHandle(pipe);
         }
+    }
+}
+
+/// Whether `ConnectNamedPipe` left a client on the pipe.
+///
+/// A client that opened the pipe between its creation and this call is
+/// already connected, and the call reports that as `ERROR_PIPE_CONNECTED`.
+/// Treated as a failure, the pipe was closed on a caller that had just
+/// connected — and the app, retrying every 100 ms while the service came up,
+/// landed in that gap often enough to see its next write fail with "no
+/// process is on the other end of the pipe".
+fn accepted(connect: windows::core::Result<()>) -> bool {
+    match connect {
+        Ok(()) => true,
+        Err(error) => error.code() == ERROR_PIPE_CONNECTED.to_hresult(),
     }
 }
 
@@ -215,4 +231,17 @@ where
     // The handle is closed by the caller of `handle_connection`, not by
     // dropping the File — doing both is a double close.
     std::mem::forget(file);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use windows::Win32::Foundation::ERROR_BROKEN_PIPE;
+
+    #[test]
+    fn a_client_that_connected_first_is_still_a_client() {
+        assert!(accepted(Ok(())));
+        assert!(accepted(Err(ERROR_PIPE_CONNECTED.to_hresult().into())));
+        assert!(!accepted(Err(ERROR_BROKEN_PIPE.to_hresult().into())));
+    }
 }
