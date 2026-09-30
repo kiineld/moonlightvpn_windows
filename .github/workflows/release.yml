@@ -161,7 +161,17 @@ jobs:
             Unsigned, so SmartScreen will warn on first run: **More info →
             Run anyway**.
 
-            Brought level with the macOS client:
+            Fixes on top of 0.12.0:
+
+            - Removing the subscription shows at once, on the page it was
+              removed from.
+            - The tray panel closes when you click anywhere else, even when it
+              was opened over another app.
+            - Switches slide and segmented choices glide, as on macOS; the
+              theme fades, and changing the language no longer makes the page
+              jump.
+
+            0.12.0 brought the client level with the macOS one:
 
             - A new look: black and white, with the lime kept to the logo;
               Mica behind the window on Windows 11, and Acrylic behind the tray
