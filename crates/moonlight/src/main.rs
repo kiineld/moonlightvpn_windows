@@ -553,6 +553,8 @@ pub struct Moonlight {
     tray_backdrop: bool,
     /// A `moonlight://` link's question, while it is on screen.
     link_prompt: Option<LinkPrompt>,
+    /// When the link's subscription started loading, to say how long it has.
+    link_started: Option<Instant>,
     /// The main window's handle, once Windows gave it Mica — the canvas is
     /// painted translucent over it, and a theme change re-tints it. None on
     /// Windows 10, where the canvas stays solid.
@@ -713,6 +715,7 @@ impl Moonlight {
             tray_blurred: None,
             tray_backdrop: false,
             link_prompt: None,
+            link_started: None,
             backdrop: None,
         }
     }
@@ -1402,6 +1405,7 @@ impl Moonlight {
                 {
                     send(Command::ImportSubscription(link.clone()));
                     self.link_prompt = Some(LinkPrompt::Adding(link));
+                    self.link_started = Some(Instant::now());
                 }
             }
             Message::LinkDismiss => self.link_prompt = None,
@@ -1874,6 +1878,11 @@ impl Moonlight {
         // While a rule is lifted, the pointer anywhere in the window moves it.
         if self.rule_drag.is_some() {
             subscriptions.push(iced::event::listen_with(drag_events));
+        }
+
+        // The link dialog counts the seconds it has been loading.
+        if matches!(self.link_prompt, Some(LinkPrompt::Adding(_))) {
+            subscriptions.push(iced::time::every(Duration::from_secs(1)).map(Message::Tick));
         }
 
         // An entrance or a rail glide needs frames regardless of what the
@@ -2695,6 +2704,10 @@ impl Moonlight {
         self.state
             .is_busy()
             .then(|| (self.started.elapsed().as_secs_f32() % TURN) / TURN)
+    }
+    /// Whole seconds the link's subscription has been loading.
+    pub fn link_waited(&self) -> u64 {
+        self.link_started.map_or(0, |at| at.elapsed().as_secs())
     }
     pub fn tray_backdrop(&self) -> bool {
         self.tray_backdrop

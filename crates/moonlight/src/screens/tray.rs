@@ -157,7 +157,7 @@ fn routing(app: &Moonlight) -> Element<'_, Message> {
             (mode, t(label, locale))
         })
         .collect();
-    components::segmented(
+    components::segmented_fill(
         &options,
         app.preferences().routing_mode,
         Message::SetRoutingMode,

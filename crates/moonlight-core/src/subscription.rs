@@ -70,6 +70,12 @@ impl Failure {
     fn is_about_the_account(&self) -> bool {
         matches!(self, Failure::DeviceLimit(_) | Failure::DeviceNotSupported)
     }
+
+    /// The server itself did not answer — a timeout, a refused or dropped
+    /// connection — as opposed to answering this one endpoint badly.
+    fn is_unreachable(&self) -> bool {
+        matches!(self, Failure::Transport(_))
+    }
 }
 
 /// Which endpoint answered — surfaced in the UI so a base64 fallback (with its
@@ -173,7 +179,12 @@ impl SubscriptionClient {
                         "{suffix} endpoint did not return a Clash config"
                     ));
                 }
-                Err(error) if error.is_about_the_account() => return Err(error),
+                // A server that did not answer one endpoint will not answer
+                // the next: three timeouts in a row were two minutes of
+                // "loading" for the one answer the first gave.
+                Err(error) if error.is_about_the_account() || error.is_unreachable() => {
+                    return Err(error)
+                }
                 Err(error) => last_error = error,
             }
         }

@@ -254,7 +254,22 @@ pub fn segmented<'a, T: Copy + PartialEq + 'a, M: Clone + 'a>(
     on_select: impl Fn(T) -> M + 'a,
     palette: Palette,
 ) -> Element<'a, M> {
-    track(options, selected, on_select, palette, 34.0, 12.5, 14.0)
+    track(options, selected, on_select, palette, Proportions::REGULAR)
+}
+
+/// The track across the whole width it is given, its options sharing it
+/// equally — the tray's routing switch, as wide as the search row under it.
+pub fn segmented_fill<'a, T: Copy + PartialEq + 'a, M: Clone + 'a>(
+    options: &[(T, &'a str)],
+    selected: T,
+    on_select: impl Fn(T) -> M + 'a,
+    palette: Palette,
+) -> Element<'a, M> {
+    let proportions = Proportions {
+        fill: true,
+        ..Proportions::REGULAR
+    };
+    track(options, selected, on_select, palette, proportions)
 }
 
 /// The smaller track — the *RU / EN* switch, which the composition sets at 28px
@@ -265,7 +280,32 @@ pub fn segmented_compact<'a, T: Copy + PartialEq + 'a, M: Clone + 'a>(
     on_select: impl Fn(T) -> M + 'a,
     palette: Palette,
 ) -> Element<'a, M> {
-    track(options, selected, on_select, palette, 28.0, 12.0, 13.0)
+    let proportions = Proportions {
+        height: 28.0,
+        size: 12.0,
+        pad_x: 13.0,
+        fill: false,
+    };
+    track(options, selected, on_select, palette, proportions)
+}
+
+/// A track's proportions: its height, its type size, the room either side of
+/// a label, and whether it spans the width it is given.
+#[derive(Debug, Clone, Copy)]
+struct Proportions {
+    height: f32,
+    size: f32,
+    pad_x: f32,
+    fill: bool,
+}
+
+impl Proportions {
+    const REGULAR: Proportions = Proportions {
+        height: 34.0,
+        size: 12.5,
+        pad_x: 14.0,
+        fill: false,
+    };
 }
 
 /// The segmented track both sizes are cut from.
@@ -279,10 +319,15 @@ fn track<'a, T: Copy + PartialEq + 'a, M: Clone + 'a>(
     selected: T,
     on_select: impl Fn(T) -> M + 'a,
     palette: Palette,
-    height: f32,
-    size: f32,
-    pad_x: f32,
+    proportions: Proportions,
 ) -> Element<'a, M> {
+    let Proportions {
+        height,
+        size,
+        pad_x,
+        fill,
+    } = proportions;
+    let width = if fill { Length::Fill } else { Length::Shrink };
     // One label per option, built twice: once in the resting colour, which is
     // what is clicked, and once in the ink that sits on the capsule, which is
     // drawn clipped to the capsule as it glides.
@@ -294,8 +339,10 @@ fn track<'a, T: Copy + PartialEq + 'a, M: Clone + 'a>(
                     .font(moonlight_design::ui(EMPHATIC))
                     .color(ink),
             )
-            .center_y(Length::Fixed(height)),
+            .center_y(Length::Fixed(height))
+            .center_x(width),
         )
+        .width(width)
         .padding([0.0, pad_x])
         .style(move |_, _| button::Style {
             background: None,
@@ -314,8 +361,8 @@ fn track<'a, T: Copy + PartialEq + 'a, M: Clone + 'a>(
 
     // Unselected labels take `text-muted`, not `text-2`: the track already sits
     // on a lighter surface, and text-2 there reads as a second selection.
-    let mut resting = row![].spacing(3);
-    let mut lit = row![].spacing(3);
+    let mut resting = row![].spacing(3).width(width);
+    let mut lit = row![].spacing(3).width(width);
     let mut chosen = usize::MAX;
     for (index, (value, label)) in options.iter().enumerate() {
         if *value == selected {
@@ -331,6 +378,7 @@ fn track<'a, T: Copy + PartialEq + 'a, M: Clone + 'a>(
         chosen,
         palette.accent,
     ))
+    .width(width)
     .padding(3)
     .style(move |_| container::Style {
         background: Some(Background::Color(palette.surface2)),

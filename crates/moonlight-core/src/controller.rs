@@ -475,7 +475,14 @@ impl Controller {
 
         // `/info` fills in the device count the headers do not carry; the
         // headers still win field by field.
-        let mut info = match client.fetch_info(&url).await {
+        // Only the device count comes from here, so it gets a few seconds, not
+        // the subscription's own forty: a slow `/info` held up a subscription
+        // that had already loaded.
+        let info_document = tokio::time::timeout(Duration::from_secs(8), client.fetch_info(&url))
+            .await
+            .ok()
+            .flatten();
+        let mut info = match info_document {
             Some(document) => subscription::merging(&document, &fetched.info),
             None => fetched.info.clone(),
         };
@@ -1230,6 +1237,10 @@ impl Controller {
     }
 
     async fn import(&mut self, url: String) {
+        // Said when the work starts, not when it was asked for: the gap
+        // between the two is time spent behind other work, and a slow import
+        // is otherwise impossible to tell apart from a slow server.
+        self.narrate("INFO", "Loading a subscription to add");
         let outcome = match subscription::normalize(&url) {
             Some(normalised) => self.fetch_subscription(normalised, true).await,
             None => Err(Issue::InvalidLink),

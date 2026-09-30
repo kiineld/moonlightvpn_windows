@@ -34,13 +34,22 @@ pub fn view<'a>(app: &'a Moonlight, prompt: &'a LinkPrompt) -> Element<'a, Messa
                 (S::LinkAdd, Some(Message::LinkAdd), true),
             ],
         ),
-        // No buttons: the line says what is happening, and it ends on
-        // its own in a moment either way.
+        // What is happening and for how long, and a way to put the dialog
+        // away. It had neither, and a server slow to answer left a spinner
+        // on top of the whole window with nothing to do but wait. Hidden, the
+        // loading goes on, and ends where a refresh's result always shows.
         LinkPrompt::Adding(_) => (
             S::LinkTitle,
-            t(S::LinkAdding, locale).to_string(),
+            match app.link_waited() {
+                0 | 1 => t(S::LinkAdding, locale).to_string(),
+                seconds => format!(
+                    "{} {seconds} {}",
+                    t(S::LinkAdding, locale),
+                    t(S::SecondsShort, locale)
+                ),
+            },
             None,
-            Vec::new(),
+            vec![(S::LinkHide, Some(Message::LinkDismiss), false)],
         ),
         LinkPrompt::Failed(_, issue) => (
             S::LinkFailedTitle,

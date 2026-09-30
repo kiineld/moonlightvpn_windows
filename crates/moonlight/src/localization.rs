@@ -276,6 +276,9 @@ strings! {
     LinkAdd         => "Добавить"           / "Add",
     LinkAdding      => "Загружаем подписку…" / "Loading the subscription…",
     LinkClose       => "Закрыть"            / "Close",
+    // While a link's subscription loads: the dialog goes, the loading goes on.
+    LinkHide        => "Скрыть"             / "Hide",
+    SecondsShort    => "с"                  / "s",
     LinkRetry       => "Ещё раз"            / "Try again",
     LinkFailedTitle => "Подписка не добавлена" / "Subscription not added",
     LinkInvalidTitle => "Эту ссылку не открыть" / "This link can't be opened",

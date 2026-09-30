@@ -83,6 +83,13 @@ pub fn view(app: &Moonlight) -> Element<'_, Message> {
             };
             list = list.push(
                 row![
+                    // When, in local time: without it a line said what
+                    // happened and nothing about how long the step before took.
+                    text(clock(entry.at))
+                        .font(moonlight_design::mono())
+                        .size(scale::MICRO)
+                        .color(palette.text_muted)
+                        .width(Length::Fixed(58.0)),
                     // The source, so the two timelines can be told apart at a
                     // glance without reading the message.
                     text(match entry.source {
@@ -115,6 +122,15 @@ pub fn view(app: &Moonlight) -> Element<'_, Message> {
         components::surface(list, palette),
     ]
     .into()
+}
+
+/// `HH:MM:SS` in the machine's own time zone.
+fn clock(unix: i64) -> String {
+    let Ok(utc) = time::OffsetDateTime::from_unix_timestamp(unix) else {
+        return String::new();
+    };
+    let at = time::UtcOffset::current_local_offset().map_or(utc, |offset| utc.to_offset(offset));
+    format!("{:02}:{:02}:{:02}", at.hour(), at.minute(), at.second())
 }
 
 /// Which of the two timelines the list is showing.
