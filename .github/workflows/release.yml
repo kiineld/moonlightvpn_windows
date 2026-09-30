@@ -161,15 +161,18 @@ jobs:
             Unsigned, so SmartScreen will warn on first run: **More info →
             Run anyway**.
 
-            Fixes on top of 0.12.0:
+            Fixes in 0.12.2:
 
-            - Removing the subscription shows at once, on the page it was
-              removed from.
-            - The tray panel closes when you click anywhere else, even when it
-              was opened over another app.
-            - Switches slide and segmented choices glide, as on macOS; the
-              theme fades, and changing the language no longer makes the page
-              jump.
+            - Adding a subscription from a link says how long it has been
+              loading and can be hidden while it finishes; a server that does
+              not answer costs one wait instead of four.
+            - The tray's Rules / Global / Direct switch spans the panel.
+            - The log shows the time of each line.
+
+            And in 0.12.1: removing the subscription shows at once, the tray
+            panel closes when you click elsewhere, switches and segmented
+            choices move as on macOS, the theme fades, and changing the
+            language no longer makes the page jump.
 
             0.12.0 brought the client level with the macOS one:
 
