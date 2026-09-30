@@ -73,6 +73,9 @@ type Events = Mutex<Option<tokio::sync::mpsc::UnboundedReceiver<Event>>>;
 static EVENTS: OnceLock<Events> = OnceLock::new();
 static COMMANDS: OnceLock<tokio::sync::mpsc::UnboundedSender<Command>> = OnceLock::new();
 
+/// The page's scroller, so an update can bring its progress into view.
+const PAGE_SCROLL: &str = "page";
+
 /// The most log lines kept in memory.
 ///
 /// A connected core writes steadily, and an unbounded list is a leak measured
@@ -199,6 +202,38 @@ impl Page {
             Page::Logs => Page::Settings,
             other => other,
         }
+    }
+}
+
+/// Where an update has got to. One for the whole app: the launch check, the
+/// banner and Settings all read and drive this.
+#[derive(Debug, Clone, PartialEq)]
+pub enum UpdateState {
+    Idle,
+    Checking,
+    UpToDate,
+    Available(moonlight_core::updater::Release),
+    Downloading {
+        release: moonlight_core::updater::Release,
+        received: u64,
+        total: Option<u64>,
+    },
+    Verifying(moonlight_core::updater::Release),
+    /// Checked and handed over: the app is leaving so Setup can run.
+    Installing(String),
+    /// Something went wrong, in the app's words; the detail is in the log.
+    Failed(String),
+}
+
+impl UpdateState {
+    pub fn is_busy(&self) -> bool {
+        matches!(
+            self,
+            UpdateState::Checking
+                | UpdateState::Downloading { .. }
+                | UpdateState::Verifying(_)
+                | UpdateState::Installing(_)
+        )
     }
 }
 
@@ -346,16 +381,22 @@ pub enum Message {
     HelperChanged(bool),
     HelperAttempted(Result<bool, String>),
     CheckForUpdates,
-    /// The line to show, and whether the app must now exit so the swap script
-    /// can replace it.
-    UpdateChecked((String, bool)),
-    /// How far the installer download has got, 0..=1, or `None` while the size
-    /// is unknown.
-    UpdateProgress(Option<f32>),
-    /// The installer is on disk and ready to run.
-    UpdateReady(std::path::PathBuf),
-    /// Run it, and leave so it can replace this binary.
-    InstallUpdate,
+    /// What a check found; `quiet` for the one at launch, which says nothing
+    /// unless there is something to install.
+    UpdateFound {
+        quiet: bool,
+        result: Result<moonlight_core::updater::Outcome, String>,
+    },
+    /// Download, check and install what was found.
+    StartUpdate,
+    UpdateDownloaded(Result<std::path::PathBuf, String>),
+    UpdateVerified(Result<std::path::PathBuf, String>),
+    /// The banner was clicked: to Settings, and install.
+    OpenUpdate,
+    /// The banner's cross: gone until the next launch.
+    HideUpdateBanner,
+    /// Bytes received, and the total when the server says.
+    UpdateProgress(u64, Option<u64>),
     OpenUrl(&'static str),
 
     LogFilterLevel(u8),
@@ -437,12 +478,10 @@ pub struct Moonlight {
     /// the form.
     import_done: bool,
     helper_installed: bool,
-    update_status: Option<String>,
-    /// Set while the installer is downloading; `None` inside means the total
-    /// size is unknown and the bar is indeterminate.
-    update_progress: Option<Option<f32>>,
-    /// The downloaded installer, once it is ready to be run.
-    update_installer: Option<std::path::PathBuf>,
+    update: UpdateState,
+    update_banner_hidden: bool,
+    /// The checked installer, run once the app has put the machine back.
+    pending_installer: Option<std::path::PathBuf>,
 
     /// When the process started, for the halo's breath.
     started: Instant,
@@ -555,10 +594,18 @@ impl Moonlight {
             app.open_main()
         };
 
+        // Once per launch, quietly: a failed check goes to the log, and only a
+        // version to install reaches the screen.
+        let check = Task::perform(check_release(), |result| Message::UpdateFound {
+            quiet: true,
+            result,
+        });
+
         (
             app,
             Task::batch([
                 window,
+                check,
                 Task::perform(scan_apps(), Message::AppsScanned),
                 // Started, not merely checked: the service is on-demand now, so
                 // it comes up with the app and goes down with it.
@@ -607,9 +654,9 @@ impl Moonlight {
             importing: false,
             import_done: false,
             helper_installed: false,
-            update_status: None,
-            update_progress: None,
-            update_installer: None,
+            update: UpdateState::Idle,
+            update_banner_hidden: false,
+            pending_installer: None,
             started: Instant::now(),
             logs: Vec::new(),
             log_level: 1,
@@ -1090,50 +1137,121 @@ impl Moonlight {
                 }
             }
             Message::CheckForUpdates => {
-                self.update_status = Some(t(S::Checking, self.locale()).to_string());
-                self.update_installer = None;
-                self.update_progress = None;
-                // A stream rather than one await: the download reports progress
-                // as it arrives, so a 21 MB installer on a slow link is a moving
-                // bar instead of a button that appears to have done nothing.
-                return Task::run(update_stream(self.locale()), |message| message);
+                if self.update.is_busy() {
+                    return Task::none();
+                }
+                self.update = UpdateState::Checking;
+                return Task::perform(check_release(), |result| Message::UpdateFound {
+                    quiet: false,
+                    result,
+                });
             }
-            Message::UpdateProgress(fraction) => {
-                self.update_progress = Some(fraction);
-                self.update_status = Some(t(S::Downloading, self.locale()).to_string());
+            Message::UpdateFound { quiet, result } => {
+                use moonlight_core::updater::Outcome;
+                self.update = match result {
+                    Ok(Outcome::Available(release)) => UpdateState::Available(release),
+                    Ok(Outcome::UpToDate { .. }) if quiet => UpdateState::Idle,
+                    Ok(Outcome::UpToDate { .. }) => UpdateState::UpToDate,
+                    Err(detail) => {
+                        self.logs.push(LogEntry::app(
+                            "WARNING",
+                            format!("Update check failed: {detail}"),
+                        ));
+                        if quiet {
+                            UpdateState::Idle
+                        } else {
+                            UpdateState::Failed(t(S::UpdateCheckFailed, self.locale()).to_string())
+                        }
+                    }
+                };
             }
-            Message::UpdateReady(installer) => {
-                self.update_progress = None;
-                self.update_installer = Some(installer);
-                self.update_status = Some(t(S::UpdateReady, self.locale()).to_string());
+            Message::OpenUpdate => {
+                self.page = Page::Settings;
+                self.page_started = Some(Instant::now());
+                self.update_banner_hidden = true;
+                return Task::batch([self.update(Message::StartUpdate), self.open_main()]);
             }
-            Message::InstallUpdate => {
-                let Some(installer) = self.update_installer.clone() else {
+            Message::HideUpdateBanner => self.update_banner_hidden = true,
+            Message::StartUpdate => {
+                let UpdateState::Available(release) = self.update.clone() else {
                     return Task::none();
                 };
-                match moonlight_core::updater::launch_installer(&installer) {
-                    Err(error) => self.update_status = Some(error.to_string()),
-                    // Setup replaces this very binary, so the app has to go —
-                    // through the ordinary close, which puts the proxy back and
-                    // stops the helper first.
-                    Ok(()) => return self.update(Message::Quit),
+                self.update = UpdateState::Downloading {
+                    total: (release.size > 0).then_some(release.size),
+                    release: release.clone(),
+                    received: 0,
+                };
+                // The progress sits at the foot of Settings; brought into view,
+                // or the wait happens somewhere nobody is looking.
+                return Task::batch([
+                    Task::run(download_stream(release), |message| message),
+                    iced::widget::operation::snap_to_end(PAGE_SCROLL),
+                ]);
+            }
+            Message::UpdateProgress(received, total) => {
+                if let UpdateState::Downloading {
+                    received: got,
+                    total: size,
+                    ..
+                } = &mut self.update
+                {
+                    *got = received;
+                    if total.is_some() {
+                        *size = total;
+                    }
                 }
             }
-            Message::UpdateChecked((status, restarting)) => {
-                self.update_progress = None;
-                self.update_status = Some(status);
-                if restarting {
-                    // The swap script is already waiting on this process id, and
-                    // will give up and change nothing if it is still here in a
-                    // minute. Leaving is the second half of the update, and used
-                    // not to happen at all — the app announced a restart and
-                    // then simply carried on running.
-                    //
-                    // Long enough to read the line, short enough that it does
-                    // not look hung.
-                    return Task::perform(tokio::time::sleep(Duration::from_millis(1200)), |()| {
-                        Message::Quit
-                    });
+            Message::UpdateDownloaded(result) => {
+                let UpdateState::Downloading { release, .. } = self.update.clone() else {
+                    return Task::none();
+                };
+                match result {
+                    Err(detail) => {
+                        self.logs.push(LogEntry::app(
+                            "WARNING",
+                            format!("Update download failed: {detail}"),
+                        ));
+                        self.update = UpdateState::Failed(
+                            t(S::UpdateDownloadFailed, self.locale()).to_string(),
+                        );
+                    }
+                    Ok(path) => {
+                        self.update = UpdateState::Verifying(release.clone());
+                        return Task::perform(
+                            async move {
+                                moonlight_core::updater::verify(&release, &path)
+                                    .await
+                                    .map(|()| path)
+                                    .map_err(|e| e.to_string())
+                            },
+                            Message::UpdateVerified,
+                        );
+                    }
+                }
+            }
+            Message::UpdateVerified(result) => {
+                let UpdateState::Verifying(release) = self.update.clone() else {
+                    return Task::none();
+                };
+                match result {
+                    // A damaged download changes nothing: the running version
+                    // stays, and says so.
+                    Err(detail) => {
+                        self.logs.push(LogEntry::app(
+                            "WARNING",
+                            format!("Update rejected: {detail}"),
+                        ));
+                        self.update =
+                            UpdateState::Failed(t(S::UpdateCorrupt, self.locale()).to_string());
+                    }
+                    // Setup replaces this very binary, so the app goes first —
+                    // through the ordinary quit, which puts the proxy back and
+                    // stops the helper — and Setup starts as it leaves.
+                    Ok(path) => {
+                        self.pending_installer = Some(path);
+                        self.update = UpdateState::Installing(release.version);
+                        return self.update(Message::Quit);
+                    }
                 }
             }
             Message::OpenUrl(url) => open_url(url),
@@ -1240,6 +1358,7 @@ impl Moonlight {
             // `iced::exit()`: that still waits for the runtime, which is
             // exactly what is stuck.
             Message::ForceClose => {
+                self.launch_pending_installer();
                 moonlight_core::tray::remove();
                 std::process::exit(0);
             }
@@ -1369,6 +1488,7 @@ impl Moonlight {
                     .map(|issue| localization::issue(&issue, self.locale()));
             }
             Event::ShutdownComplete => {
+                self.launch_pending_installer();
                 moonlight_core::tray::remove();
                 return iced::exit();
             }
@@ -1399,6 +1519,16 @@ impl Moonlight {
             }
         }
         Task::none()
+    }
+
+    /// Runs the checked installer, if an update is waiting on the app to leave.
+    fn launch_pending_installer(&mut self) {
+        let Some(installer) = self.pending_installer.take() else {
+            return;
+        };
+        let arguments =
+            moonlight_core::updater::installer_arguments(self.locale() == AppLocale::Ru);
+        let _ = moonlight_core::updater::launch_installer(&installer, &arguments);
     }
 
     /// A window operation on the main window, if it is open.
@@ -1672,6 +1802,7 @@ impl Moonlight {
                                     ..iced::Padding::ZERO
                                 }),
                             )
+                            .id(PAGE_SCROLL)
                             .direction(iced::widget::scrollable::Direction::Vertical(
                                 iced::widget::scrollable::Scrollbar::new()
                                     .width(SCROLLBAR_WIDTH)
@@ -1732,7 +1863,19 @@ impl Moonlight {
         // The resize edges go on last, over everything: an undecorated window
         // has no non-client area for Windows to hit-test, so the app owns its
         // own borders.
-        let framed = screens::resize::frame(window.into());
+        let window: Element<'_, Message> = match self.update_banner() {
+            Some(version) => iced::widget::stack![
+                window,
+                // The bottom corner: the header's actions sit in the top one.
+                container(screens::update::banner(self, version))
+                    .align_right(Length::Fill)
+                    .align_bottom(Length::Fill)
+                    .padding(24),
+            ]
+            .into(),
+            None => window.into(),
+        };
+        let framed = screens::resize::frame(window);
         match (&self.link_prompt, &self.rule_editor) {
             (Some(prompt), _) => {
                 iced::widget::stack![framed, screens::link::view(self, prompt)].into()
@@ -1978,104 +2121,51 @@ fn elevate(_argument: &str) -> Result<(), String> {
     Err(HELPER_FAILED.to_string())
 }
 
-/// The whole update: check, then download the installer while reporting how far
-/// it has got, then hand back a path to run.
-///
-/// A stream because the UI wants the middle of it, not only the end.
-fn update_stream(locale: AppLocale) -> impl futures_util::Stream<Item = Message> {
-    use moonlight_core::updater::{self, Outcome};
+/// Asks GitHub whether there is anything to install, with the reason kept for
+/// the log when it cannot say.
+async fn check_release() -> Result<moonlight_core::updater::Outcome, String> {
+    moonlight_core::updater::check(RELEASES_API, VERSION)
+        .await
+        .map_err(|e| e.to_string())
+}
 
+/// Downloads the release's installer, reporting as it goes.
+fn download_stream(
+    release: moonlight_core::updater::Release,
+) -> impl futures_util::Stream<Item = Message> {
     iced::stream::channel(
         16,
         move |mut output: iced::futures::channel::mpsc::Sender<Message>| async move {
             use futures_util::SinkExt;
-
-            let say = |text: String| Message::UpdateChecked((text, false));
-
-            let release = match updater::check(RELEASES_API, VERSION).await {
-                Err(error) => {
-                    let _ = output.send(say(error.to_string())).await;
-                    return;
-                }
-                Ok(Outcome::UpToDate { current }) => {
-                    let text = match locale {
-                        AppLocale::Ru => format!("Установлена последняя версия ({current})"),
-                        AppLocale::En => format!("You are on the latest version ({current})"),
-                    };
-                    let _ = output.send(say(text)).await;
-                    return;
-                }
-                Ok(Outcome::Available(release)) => release,
-            };
-
-            // Named for the version, so a stale installer from a previous check is
-            // never mistaken for this one.
+            // Named for the version, so a stale download of another one is
+            // never mistaken for this.
             let target =
-                std::env::temp_dir().join(format!("Moonlight-Setup-{}.exe", release.version));
-
-            let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<Option<f32>>();
+                std::env::temp_dir().join(format!("moonlight-setup-{}.exe", release.version));
+            let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<(u64, Option<u64>)>();
             let mut forwarding = output.clone();
             let pump = tokio::spawn(async move {
-                while let Some(fraction) = rx.recv().await {
-                    let _ = forwarding.send(Message::UpdateProgress(fraction)).await;
+                while let Some((received, total)) = rx.recv().await {
+                    let _ = forwarding
+                        .send(Message::UpdateProgress(received, total))
+                        .await;
                 }
             });
-
-            let outcome =
-                updater::download_with_progress(&release.download_url, &target, move |fraction| {
-                    let _ = tx.send(fraction);
-                })
-                .await;
+            let outcome = moonlight_core::updater::download_with_progress(
+                &release.download_url,
+                &target,
+                move |received, total| {
+                    let _ = tx.send((received, total));
+                },
+            )
+            .await;
             pump.abort();
-
-            let message = match outcome {
-                Err(error) => say(error.to_string()),
-                Ok(()) => Message::UpdateReady(target),
-            };
-            let _ = output.send(message).await;
+            let _ = output
+                .send(Message::UpdateDownloaded(
+                    outcome.map(|()| target).map_err(|e| e.to_string()),
+                ))
+                .await;
         },
     )
-}
-
-/// Returns the line to show, and whether the app must now exit so the swap
-/// script can replace it.
-#[allow(dead_code)]
-async fn check_updates(locale: AppLocale) -> (String, bool) {
-    use moonlight_core::updater::{self, Outcome};
-    match updater::check(RELEASES_API, VERSION).await {
-        Err(error) => (error.to_string(), false),
-        Ok(Outcome::UpToDate { current }) => (
-            match locale {
-                AppLocale::Ru => format!("Установлена последняя версия ({current})"),
-                AppLocale::En => format!("You are on the latest version ({current})"),
-            },
-            false,
-        ),
-        Ok(Outcome::Available(release)) => {
-            let version = release.version.clone();
-            let temporary = std::env::temp_dir().join("moonlight-update.zip");
-            match updater::download(&release.download_url, &temporary).await {
-                Err(error) => (error.to_string(), false),
-                Ok(()) => match updater::launch_swap(&temporary) {
-                    Err(error) => (error.to_string(), false),
-                    // The script waits for this process to exit before it
-                    // touches anything, so leaving is what completes the
-                    // update — and the caller has to actually leave.
-                    Ok(()) => (
-                        match locale {
-                            AppLocale::Ru => {
-                                format!("Обновление до {version}. Приложение перезапустится.")
-                            }
-                            AppLocale::En => {
-                                format!("Updating to {version}. The app will restart.")
-                            }
-                        },
-                        true,
-                    ),
-                },
-            }
-        }
-    }
 }
 
 fn open_url(url: &str) {
@@ -2322,8 +2412,15 @@ impl Moonlight {
     pub fn helper_installed(&self) -> bool {
         self.helper_installed
     }
-    pub fn update_status(&self) -> Option<&str> {
-        self.update_status.as_deref()
+    pub fn update_state(&self) -> &UpdateState {
+        &self.update
+    }
+    /// The version the corner banner offers, while it has one to offer.
+    pub fn update_banner(&self) -> Option<&str> {
+        match &self.update {
+            UpdateState::Available(release) if !self.update_banner_hidden => Some(&release.version),
+            _ => None,
+        }
     }
     pub fn logs(&self) -> &[LogEntry] {
         &self.logs
@@ -2333,13 +2430,6 @@ impl Moonlight {
     }
     /// The download's progress while one is running, or `None` when nothing is
     /// downloading. The inner `None` means the size is unknown.
-    pub fn update_progress(&self) -> Option<Option<f32>> {
-        self.update_progress
-    }
-    /// The downloaded installer, once there is one to run.
-    pub fn update_installer(&self) -> Option<&std::path::Path> {
-        self.update_installer.as_deref()
-    }
     pub fn log_source(&self) -> screens::logs::LogFilter {
         self.log_source
     }
@@ -2603,6 +2693,61 @@ mod tests {
     }
 
     #[test]
+    fn an_update_goes_from_banner_to_download_and_a_damaged_one_changes_nothing() {
+        use moonlight_core::updater::{Outcome, Release};
+        let release = Release {
+            version: "9.9.9".into(),
+            notes: String::new(),
+            download_url: "https://example/setup.exe".into(),
+            asset_name: "Moonlight-Setup.exe".into(),
+            size: 1000,
+            checksums_url: Some("https://example/sums".into()),
+        };
+        let mut app = app();
+
+        // The launch check says nothing when it fails, only to the log.
+        let _ = app.update(Message::UpdateFound {
+            quiet: true,
+            result: Err("offline".into()),
+        });
+        assert_eq!(app.update, UpdateState::Idle);
+        assert!(app.logs.iter().any(|l| l.message.contains("offline")));
+
+        // A version to install gets the banner, until its cross.
+        let _ = app.update(Message::UpdateFound {
+            quiet: true,
+            result: Ok(Outcome::Available(release.clone())),
+        });
+        assert_eq!(app.update_banner(), Some("9.9.9"));
+        let _ = app.update(Message::HideUpdateBanner);
+        assert_eq!(app.update_banner(), None);
+
+        let _ = app.update(Message::StartUpdate);
+        assert!(matches!(
+            app.update,
+            UpdateState::Downloading {
+                received: 0,
+                total: Some(1000),
+                ..
+            }
+        ));
+        let _ = app.update(Message::UpdateProgress(400, Some(1000)));
+        assert!(matches!(
+            app.update,
+            UpdateState::Downloading { received: 400, .. }
+        ));
+
+        let _ = app.update(Message::UpdateDownloaded(Ok("setup.exe".into())));
+        assert!(matches!(app.update, UpdateState::Verifying(_)));
+        let _ = app.update(Message::UpdateVerified(Err("checksum".into())));
+        assert!(matches!(app.update, UpdateState::Failed(_)));
+        assert!(
+            app.pending_installer.is_none(),
+            "a damaged download is never run"
+        );
+    }
+
+    #[test]
     fn a_bad_rule_is_refused_with_its_reason_and_the_editor_stays_open() {
         // The core refuses the whole config for one bad rule, so the tunnel
         // stops rather than the rule being skipped.
@@ -2804,7 +2949,18 @@ mod tests {
                     start: time::OffsetDateTime::now_utc(),
                 }];
                 app.last_error = Some("something went wrong".into());
-                app.update_status = Some("checking".into());
+                app.update = UpdateState::Downloading {
+                    release: moonlight_core::updater::Release {
+                        version: "0.12.0".into(),
+                        notes: String::new(),
+                        download_url: String::new(),
+                        asset_name: "Moonlight-Setup.exe".into(),
+                        size: 30_000_000,
+                        checksums_url: None,
+                    },
+                    received: 12_000_000,
+                    total: Some(30_000_000),
+                };
             }
 
             for page in [

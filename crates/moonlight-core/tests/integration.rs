@@ -393,3 +393,41 @@ fn the_inventory_finds_real_programs_on_this_machine() {
         );
     }
 }
+
+/// The latest real release, end to end short of installing it: its installer
+/// downloads, and matches the checksum the release publishes for it.
+///
+/// Opt-in, since it downloads the installer: set MOONLIGHT_NETWORK_TESTS=1.
+#[test]
+fn the_latest_release_downloads_and_matches_its_checksum() {
+    use moonlight_core::updater::{self, Outcome};
+
+    if std::env::var("MOONLIGHT_NETWORK_TESTS").as_deref() != Ok("1") {
+        eprintln!("skipped: set MOONLIGHT_NETWORK_TESTS=1 to download the latest release");
+        return;
+    }
+    let runtime = tokio::runtime::Runtime::new().expect("runtime");
+    runtime.block_on(async {
+        let api = "https://api.github.com/repos/kiineld/moonlightvpn_windows/releases";
+        // Asked as a version older than any release, so the newest is offered.
+        let Outcome::Available(release) = updater::check(api, "0.0.1").await.expect("checks")
+        else {
+            panic!("no release was offered");
+        };
+        assert!(
+            release.checksums_url.is_some(),
+            "{} publishes no checksums",
+            release.version
+        );
+        let target =
+            std::env::temp_dir().join(format!("moonlight-test-setup-{}.exe", release.version));
+        let mut reports = 0;
+        updater::download_with_progress(&release.download_url, &target, |_, _| reports += 1)
+            .await
+            .expect("downloads");
+        assert!(reports > 1, "progress was reported as it arrived");
+        let verified = updater::verify(&release, &target).await;
+        let _ = std::fs::remove_file(&target);
+        verified.expect("matches the release's own checksum");
+    });
+}

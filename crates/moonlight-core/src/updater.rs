@@ -1,18 +1,23 @@
-//! Checks GitHub for a newer release, and swaps the installation for it.
+//! Checks GitHub for a newer release, and installs it.
 //!
-//! There is no App Store and no MSIX, so *Проверить обновления* does what a user
-//! would otherwise do by hand: ask GitHub for the latest release, download the
-//! zip, and replace the folder.
+//! There is no store to do this, so the app does what a user would otherwise
+//! do by hand: ask GitHub for the latest release, download its installer, and
+//! run it.
 //!
-//! ## Why the swap runs in a detached script
+//! ## How an update installs
 //!
-//! A running `.exe` cannot be replaced on Windows — the loader holds the file
-//! and `MoveFile` fails with `ERROR_SHARING_VIOLATION`. This is stricter than
-//! macOS, where a bundle can be replaced under a running app and only *then*
-//! behaves unpredictably. So the update is written as a `.cmd`, started
-//! detached, and the app exits: the script waits for the process to disappear,
-//! moves the old folder aside, unpacks the new one, **puts the old one back if
-//! the unpack fails** rather than leaving no application at all, and relaunches.
+//! The release's `Moonlight-Setup.exe` is downloaded and checked against the
+//! release's own `SHA256SUMS.txt` **before the app quits**, so a damaged
+//! download leaves the working version running rather than no version at all.
+//! The app then puts the machine back and quits, and Setup runs silently: it
+//! replaces the installation — rolling its own changes back if anything fails,
+//! which is Inno Setup's behaviour, not a script's — re-registers the TUN
+//! service with the tasks chosen at first install, and starts the new version.
+//!
+//! The installer, not the zip. Updating used to mean unpacking the zip over the
+//! install folder from a detached batch script, unattended, with the app
+//! already gone — and that script had never run against a real release. Setup
+//! does all of it already, and is the same file a new user installs with.
 //!
 //! ## Why versions are compared numerically
 //!
@@ -22,16 +27,20 @@
 use serde::Deserialize;
 use thiserror::Error;
 
-#[derive(Debug, Error)]
+#[derive(Debug, Error, PartialEq)]
 pub enum Failure {
     #[error("Could not reach GitHub: {0}")]
     Transport(String),
     #[error("GitHub returned HTTP {0}")]
     Http(u16),
-    #[error("The latest release has no Windows download")]
+    #[error("The latest release has no Windows installer")]
     NoAsset,
-    #[error("Could not write the update script: {0}")]
-    Script(String),
+    #[error("The release publishes no checksum for its installer")]
+    NoChecksum,
+    #[error("The download does not match the release's checksum")]
+    Checksum,
+    #[error("{0}")]
+    Io(String),
 }
 
 /// What the check found.
@@ -46,7 +55,11 @@ pub struct Release {
     pub version: String,
     pub notes: String,
     pub download_url: String,
+    /// The installer's file name, as the checksum list names it.
+    pub asset_name: String,
     pub size: u64,
+    /// `SHA256SUMS.txt`, which every release since the installer publishes.
+    pub checksums_url: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -107,43 +120,18 @@ pub fn is_newer(candidate: &str, current: &str) -> bool {
     false
 }
 
-/// Picks the asset to download from a release's attachments.
-///
-/// The **installer**, in preference to the zip. Updating used to mean unpacking
-/// the zip over the install directory from a detached batch script, which had to
-/// wait for the app to exit, move the folder aside, unpack, and put it back on
-/// any failure — a lot of moving parts running unattended with no UI, and no way
-/// to register the helper service or refresh a Start Menu entry. Setup does all
-/// of that already, is signed by the same release, and can tell the user what it
-/// is doing.
-///
-/// The zip stays as the fallback, because a release built before the installer
-/// existed has nothing else to offer.
+/// Picks the installer from a release's attachments. The bare executables are
+/// for replacing one file by hand — downloading one and running it would
+/// launch the app, not update anything.
 pub fn pick_asset<'a>(names: impl Iterator<Item = &'a str>) -> Option<&'a str> {
-    let names: Vec<&str> = names.collect();
-
     let mut installers: Vec<&str> = names
-        .iter()
-        .copied()
         .filter(|n| {
             let lower = n.to_lowercase();
             lower.ends_with(".exe") && lower.contains("setup")
         })
         .collect();
     installers.sort_unstable();
-    if let Some(installer) = installers.first() {
-        return Some(installer);
-    }
-
-    let mut zips: Vec<&str> = names
-        .into_iter()
-        .filter(|n| {
-            let lower = n.to_lowercase();
-            lower.ends_with(".zip") && (lower.contains("x86_64") || lower.contains("x64"))
-        })
-        .collect();
-    zips.sort_unstable();
-    zips.first().copied()
+    installers.first().copied()
 }
 
 /// Reads the GitHub releases JSON and decides whether it is worth offering.
@@ -181,259 +169,191 @@ pub fn evaluate(body: &str, current_version: &str) -> Result<Outcome, Failure> {
         .iter()
         .find(|a| a.name == asset_name)
         .ok_or(Failure::NoAsset)?;
+    let checksums_url = release
+        .assets
+        .iter()
+        .find(|a| a.name.eq_ignore_ascii_case("SHA256SUMS.txt"))
+        .map(|a| a.browser_download_url.clone());
 
     Ok(Outcome::Available(Release {
         version: release.tag_name.trim_start_matches(['v', 'V']).to_string(),
         notes: release.body.clone(),
         download_url: asset.browser_download_url.clone(),
+        asset_name,
         size: asset.size,
+        checksums_url,
     }))
 }
 
-/// Asks GitHub what the latest release is.
-pub async fn check(releases_api: &str, current_version: &str) -> Result<Outcome, Failure> {
-    let client = reqwest::Client::builder()
-        // The same reason the subscription client does it: while connected in
-        // system-proxy mode this app has pointed the machine at its own core,
-        // and an update check should not depend on the tunnel it is about to
-        // replace the client for.
+/// A client that ignores the machine's proxy settings: while connected in
+/// system-proxy mode the app has pointed the machine at its own core, and an
+/// update should not depend on the tunnel it is about to replace the app for.
+fn client(timeout_secs: u64) -> Result<reqwest::Client, Failure> {
+    reqwest::Client::builder()
         .no_proxy()
-        .timeout(std::time::Duration::from_secs(30))
+        .timeout(std::time::Duration::from_secs(timeout_secs))
         .build()
-        .map_err(|e| Failure::Transport(e.to_string()))?;
+        .map_err(|e| Failure::Transport(e.to_string()))
+}
 
-    let response = client
-        .get(releases_api)
-        .header("User-Agent", format!("moonlight/{current_version}"))
+async fn get_text(url: &str, user_agent: &str) -> Result<String, Failure> {
+    let response = client(30)?
+        .get(url)
+        .header("User-Agent", user_agent)
         .header("Accept", "application/vnd.github+json")
         .send()
         .await
-        .map_err(|e| Failure::Transport(e.to_string()))?;
-
+        .map_err(|e| Failure::Transport(e.without_url().to_string()))?;
     let status = response.status();
     if !status.is_success() {
         return Err(Failure::Http(status.as_u16()));
     }
-    let body = response
+    response
         .text()
         .await
-        .map_err(|e| Failure::Transport(e.to_string()))?;
+        .map_err(|e| Failure::Transport(e.without_url().to_string()))
+}
+
+/// Asks GitHub what the latest release is.
+pub async fn check(releases_api: &str, current_version: &str) -> Result<Outcome, Failure> {
+    let body = get_text(releases_api, &format!("moonlight/{current_version}")).await?;
     evaluate(&body, current_version)
 }
 
-/// Downloads a release zip to `destination`.
-pub async fn download(url: &str, destination: &std::path::Path) -> Result<(), Failure> {
-    let client = reqwest::Client::builder()
-        .no_proxy()
-        .timeout(std::time::Duration::from_secs(600))
-        .build()
-        .map_err(|e| Failure::Transport(e.to_string()))?;
-
-    let response = client
-        .get(url)
-        .header("User-Agent", "moonlight")
-        .send()
-        .await
-        .map_err(|e| Failure::Transport(e.to_string()))?;
-    if !response.status().is_success() {
-        return Err(Failure::Http(response.status().as_u16()));
-    }
-    let bytes = response
-        .bytes()
-        .await
-        .map_err(|e| Failure::Transport(e.to_string()))?;
-    std::fs::write(destination, &bytes).map_err(|e| Failure::Script(e.to_string()))
-}
-
-/// Downloads, reporting how far along it is.
+/// Downloads, reporting bytes received and the total as they arrive — a 25 MB
+/// installer on a slow link is otherwise half a minute of a button that looks
+/// like it did nothing. The total is `None` when the server does not say.
 ///
-/// A 21 MB installer on a slow link is thirty seconds of a button that looks
-/// like it did nothing, which is exactly how the old updater read. `progress` is
-/// called with a fraction in 0..=1 as the body arrives.
-///
-/// Falls back to reporting nothing rather than failing when the server sends no
-/// `Content-Length`: an unknown total is a reason for an indeterminate bar, not
-/// for refusing the download.
+/// Written whole to a `.part` beside `destination` and moved into place, so an
+/// interrupted download cannot leave a half-installer looking complete.
 pub async fn download_with_progress(
     url: &str,
     destination: &std::path::Path,
-    mut progress: impl FnMut(Option<f32>),
+    mut progress: impl FnMut(u64, Option<u64>),
 ) -> Result<(), Failure> {
     use futures_util::StreamExt;
 
-    let client = reqwest::Client::builder()
-        .no_proxy()
-        .timeout(std::time::Duration::from_secs(600))
-        .build()
-        .map_err(|e| Failure::Transport(e.to_string()))?;
-
-    let response = client
+    let response = client(900)?
         .get(url)
         .header("User-Agent", "moonlight")
         .send()
         .await
-        .map_err(|e| Failure::Transport(e.to_string()))?;
+        .map_err(|e| Failure::Transport(e.without_url().to_string()))?;
     if !response.status().is_success() {
         return Err(Failure::Http(response.status().as_u16()));
     }
 
     let total = response.content_length();
-    let mut written: u64 = 0;
+    let mut received: u64 = 0;
     let mut buffer: Vec<u8> = Vec::with_capacity(total.unwrap_or(0) as usize);
     let mut stream = response.bytes_stream();
-
-    progress(total.map(|_| 0.0));
+    progress(0, total);
     while let Some(chunk) = stream.next().await {
-        let chunk = chunk.map_err(|e| Failure::Transport(e.to_string()))?;
-        written += chunk.len() as u64;
+        let chunk = chunk.map_err(|e| Failure::Transport(e.without_url().to_string()))?;
+        received += chunk.len() as u64;
         buffer.extend_from_slice(&chunk);
-        progress(total.map(|t| (written as f32 / t as f32).clamp(0.0, 1.0)));
+        progress(received, total);
     }
 
-    // Written whole, then moved into place, so an interrupted download cannot
-    // leave a half-installer sitting where a complete one is expected.
     let partial = destination.with_extension("part");
-    std::fs::write(&partial, &buffer).map_err(|e| Failure::Script(e.to_string()))?;
-    std::fs::rename(&partial, destination).map_err(|e| Failure::Script(e.to_string()))?;
-    Ok(())
+    std::fs::write(&partial, &buffer).map_err(|e| Failure::Io(e.to_string()))?;
+    std::fs::rename(&partial, destination).map_err(|e| Failure::Io(e.to_string()))
 }
 
-/// Hands the downloaded installer to Windows and asks it to run.
-///
-/// The app must then exit: setup replaces the very binary that started it, and
-/// Inno's `CloseApplications` would otherwise be left prompting about a file in
-/// use.
+/// The hash `SHA256SUMS.txt` gives for `name`: lines of `<hex>  <name>`, or
+/// `<hex> *<name>` in binary mode, matched on the file name.
+pub fn expected_hash(sums: &str, name: &str) -> Option<String> {
+    sums.lines().find_map(|line| {
+        let (hash, file) = line.trim().split_once(char::is_whitespace)?;
+        let file = file.trim().trim_start_matches('*');
+        (file.eq_ignore_ascii_case(name)
+            && hash.len() == 64
+            && hash.chars().all(|c| c.is_ascii_hexdigit()))
+        .then(|| hash.to_ascii_lowercase())
+    })
+}
+
+/// SHA-256 of a file, in lower-case hex, through Windows' own CNG — the
+/// one-shot hash every Windows 10 has, rather than a dependency for it.
 #[cfg(windows)]
-pub fn launch_installer(installer: &std::path::Path) -> Result<(), Failure> {
-    std::process::Command::new(installer)
-        .spawn()
-        .map(|_| ())
-        .map_err(|e| Failure::Script(e.to_string()))
+pub fn sha256_hex(path: &std::path::Path) -> Result<String, Failure> {
+    use windows::Win32::Security::Cryptography::{BCryptHash, BCRYPT_SHA256_ALG_HANDLE};
+    let data = std::fs::read(path).map_err(|e| Failure::Io(e.to_string()))?;
+    let mut digest = [0u8; 32];
+    let status = unsafe { BCryptHash(BCRYPT_SHA256_ALG_HANDLE, None, &data, &mut digest) };
+    if status.is_err() {
+        return Err(Failure::Io(format!("hashing failed: {status:?}")));
+    }
+    Ok(digest.iter().map(|b| format!("{b:02x}")).collect())
 }
 
 #[cfg(not(windows))]
-pub fn launch_installer(_installer: &std::path::Path) -> Result<(), Failure> {
-    Err(Failure::Script("Windows only".into()))
+pub fn sha256_hex(_path: &std::path::Path) -> Result<String, Failure> {
+    Err(Failure::Io("hashing is done with Windows' CNG".into()))
 }
 
-/// The batch script that performs the swap after this process exits.
-///
-/// Written out rather than built with a command builder so it can be read in
-/// full here — it runs unattended, with the application already gone, and a
-/// mistake in it leaves the user with no application at all.
-///
-/// The ordering is the whole point:
-///
-/// 1. Wait for the PID to disappear. Copying over a loaded `.exe` fails, and
-///    failing *after* the old folder has been moved aside is the case that
-///    loses the installation.
-/// 2. Move the current folder aside rather than deleting it. If the unpack
-///    fails there is still something to put back.
-/// 3. Unpack, and on any failure restore the moved folder and relaunch the old
-///    version — a working old client beats a half-written new one.
-/// 4. Relaunch, then delete the backup and the script's own temporary files.
-pub fn swap_script(pid: u32, zip: &str, install_dir: &str, executable: &str) -> String {
-    let backup = format!("{install_dir}.old");
+/// Checks the downloaded installer against the release's checksum list. Done
+/// before the app quits, so a damaged download changes nothing.
+pub async fn verify(release: &Release, file: &std::path::Path) -> Result<(), Failure> {
+    let url = release
+        .checksums_url
+        .as_deref()
+        .ok_or(Failure::NoChecksum)?;
+    let sums = get_text(url, "moonlight").await?;
+    let expected = expected_hash(&sums, &release.asset_name).ok_or(Failure::NoChecksum)?;
+    let actual = sha256_hex(file)?;
+    if actual == expected {
+        Ok(())
+    } else {
+        Err(Failure::Checksum)
+    }
+}
+
+/// How Setup is asked to run for an update: no questions and no wizard pages,
+/// only its progress window; the previous choices of tasks (the TUN service, a
+/// desktop icon) are Inno's default; no reboot; and the language the app is in.
+pub fn installer_arguments(russian: bool) -> String {
     format!(
-        r#"@echo off
-setlocal
-set "PID={pid}"
-set "ZIP={zip}"
-set "DIR={install_dir}"
-set "BACKUP={backup}"
-set "EXE={executable}"
-
-rem 1. Wait for the app to exit. A loaded .exe cannot be replaced, and the
-rem    timeout is generous because a hung window is better than a lost install.
-set /a TRIES=0
-:wait
-tasklist /FI "PID eq %PID%" 2>nul | find "%PID%" >nul
-if errorlevel 1 goto gone
-set /a TRIES+=1
-if %TRIES% GEQ 60 goto giveup
-timeout /t 1 /nobreak >nul
-goto wait
-
-:giveup
-rem The app never exited. Do nothing at all rather than replace files under it.
-del /q "%ZIP%" 2>nul
-exit /b 1
-
-:gone
-rem 2. Move rather than delete, so there is something to restore.
-if exist "%BACKUP%" rd /s /q "%BACKUP%" 2>nul
-move "%DIR%" "%BACKUP%" >nul 2>&1
-if errorlevel 1 goto restore
-
-mkdir "%DIR%" 2>nul
-rem 3. Unpack. Expand-Archive is in every supported PowerShell.
-powershell -NoProfile -NonInteractive -Command ^
-  "try {{ Expand-Archive -LiteralPath '%ZIP%' -DestinationPath '%DIR%' -Force; exit 0 }} catch {{ exit 1 }}"
-if errorlevel 1 goto restore
-if not exist "%DIR%\%EXE%" goto restore
-
-rem 4. New version is in place. Relaunch, then clean up.
-start "" "%DIR%\%EXE%"
-rd /s /q "%BACKUP%" 2>nul
-del /q "%ZIP%" 2>nul
-(goto) 2>nul & del "%~f0"
-exit /b 0
-
-:restore
-rem Put the old installation back and start it. A working old client beats a
-rem half-written new one.
-if exist "%DIR%" rd /s /q "%DIR%" 2>nul
-if exist "%BACKUP%" move "%BACKUP%" "%DIR%" >nul 2>&1
-if exist "%DIR%\%EXE%" start "" "%DIR%\%EXE%"
-del /q "%ZIP%" 2>nul
-(goto) 2>nul & del "%~f0"
-exit /b 1
-"#
+        "/SP- /SILENT /SUPPRESSMSGBOXES /NORESTART /CLOSEAPPLICATIONS /LANG={}",
+        if russian { "ru" } else { "en" }
     )
 }
 
-/// Writes the script and starts it detached, so it outlives this process.
+/// Hands the installer to Windows to run, with its elevation prompt.
+///
+/// Through the shell rather than `CreateProcess`: Setup asks for administrator
+/// rights, and `CreateProcess` refuses an executable that does
+/// (`ERROR_ELEVATION_REQUIRED`) instead of showing the prompt.
 #[cfg(windows)]
-pub fn launch_swap(zip: &std::path::Path) -> Result<(), Failure> {
-    use std::os::windows::process::CommandExt;
+pub fn launch_installer(installer: &std::path::Path, arguments: &str) -> Result<(), Failure> {
+    use windows::core::{w, HSTRING};
+    use windows::Win32::UI::Shell::ShellExecuteW;
+    use windows::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
 
-    let executable = std::env::current_exe().map_err(|e| Failure::Script(e.to_string()))?;
-    let install_dir = executable
-        .parent()
-        .ok_or_else(|| Failure::Script("the executable has no parent directory".into()))?;
-    let name = executable
-        .file_name()
-        .ok_or_else(|| Failure::Script("the executable has no file name".into()))?;
-
-    let script_path = std::env::temp_dir().join("moonlight-update.cmd");
-    let script = swap_script(
-        std::process::id(),
-        &zip.to_string_lossy(),
-        &install_dir.to_string_lossy(),
-        &name.to_string_lossy(),
-    );
-    std::fs::write(&script_path, script).map_err(|e| Failure::Script(e.to_string()))?;
-
-    // DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP, so the script is not killed
-    // when this process exits — which it is about to.
-    const DETACHED_PROCESS: u32 = 0x0000_0008;
-    const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
-    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-
-    std::process::Command::new("cmd")
-        .arg("/c")
-        .arg(&script_path)
-        .creation_flags(DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW)
-        .spawn()
-        .map_err(|e| Failure::Script(e.to_string()))?;
-    Ok(())
+    let result = unsafe {
+        ShellExecuteW(
+            None,
+            w!("open"),
+            &HSTRING::from(installer.as_os_str()),
+            &HSTRING::from(arguments),
+            None,
+            SW_SHOWNORMAL,
+        )
+    };
+    // Anything above 32 is success; below is an error code.
+    if result.0 as isize > 32 {
+        Ok(())
+    } else {
+        Err(Failure::Io(format!(
+            "the installer did not start ({})",
+            result.0 as isize
+        )))
+    }
 }
 
 #[cfg(not(windows))]
-pub fn launch_swap(_zip: &std::path::Path) -> Result<(), Failure> {
-    Err(Failure::Script(
-        "In-place update is a Windows-only path".into(),
-    ))
+pub fn launch_installer(_installer: &std::path::Path, _arguments: &str) -> Result<(), Failure> {
+    Err(Failure::Io("Windows only".into()))
 }
 
 #[cfg(test)]
@@ -471,8 +391,6 @@ mod tests {
 
     #[test]
     fn a_prerelease_suffix_is_ignored_for_ordering() {
-        // The numbers are what order releases; the suffix only says which
-        // channel, and a pre-release is filtered out before it gets here.
         assert_eq!(version_parts("1.2.3-beta.1"), vec![1, 2, 3]);
         assert_eq!(version_parts("v0.1.0"), vec![0, 1, 0]);
     }
@@ -490,23 +408,7 @@ mod tests {
     }
 
     #[test]
-    fn the_zip_is_picked_over_the_bare_exe() {
-        // An update has to replace the core and wintun.dll too; swapping only
-        // moonlight.exe leaves a new client on an old core.
-        let names = [
-            "Moonlight.exe",
-            "Moonlight-Helper.exe",
-            "Moonlight-x86_64.zip",
-            "SHA256SUMS.txt",
-        ];
-        assert_eq!(pick_asset(names.into_iter()), Some("Moonlight-x86_64.zip"));
-    }
-
-    #[test]
-    fn the_installer_wins_over_the_zip() {
-        // Setup registers the helper service, refreshes the Start Menu entry and
-        // can say what it is doing. The zip route was a detached batch script
-        // doing none of that, unattended, with the app already gone.
+    fn the_installer_is_the_asset_and_nothing_else_is() {
         let names = [
             "Moonlight-Helper.exe",
             "Moonlight-Setup.exe",
@@ -515,49 +417,35 @@ mod tests {
             "SHA256SUMS.txt",
         ];
         assert_eq!(pick_asset(names.into_iter()), Some("Moonlight-Setup.exe"));
-    }
-
-    #[test]
-    fn a_release_from_before_the_installer_still_offers_its_zip() {
-        // v0.4.0 and earlier have no setup binary, and must remain updatable.
-        let names = ["Moonlight-x86_64.zip", "Moonlight.exe", "SHA256SUMS.txt"];
-        assert_eq!(pick_asset(names.into_iter()), Some("Moonlight-x86_64.zip"));
-    }
-
-    #[test]
-    fn the_bare_executables_are_never_mistaken_for_an_installer() {
-        // `Moonlight.exe` and `Moonlight-Helper.exe` are single binaries for
-        // replacing one file by hand. Downloading one and running it would
-        // launch the app, not update anything.
+        // The bare executables launch the app rather than install anything.
         assert_eq!(
             pick_asset(["Moonlight.exe", "Moonlight-Helper.exe"].into_iter()),
             None
         );
-    }
-
-    #[test]
-    fn a_release_with_no_zip_has_no_asset_to_offer() {
-        assert_eq!(pick_asset(["Moonlight.exe", "notes.txt"].into_iter()), None);
-        // A zip for another architecture is not this one.
-        assert_eq!(pick_asset(["Moonlight-arm64.zip"].into_iter()), None);
+        assert_eq!(pick_asset(["Moonlight-x86_64.zip"].into_iter()), None);
     }
 
     fn release_json(tag: &str, draft: bool, prerelease: bool) -> String {
         format!(
             r#"{{"tag_name":"{tag}","body":"notes","draft":{draft},"prerelease":{prerelease},
-                "assets":[{{"name":"Moonlight-x86_64.zip",
-                            "browser_download_url":"https://example/{tag}.zip","size":1234}}]}}"#
+                "assets":[{{"name":"Moonlight-Setup.exe","browser_download_url":"https://example/{tag}.exe","size":1234}},
+                          {{"name":"SHA256SUMS.txt","browser_download_url":"https://example/{tag}.sums","size":10}}]}}"#
         )
     }
 
     #[test]
-    fn a_newer_release_is_offered() {
+    fn a_newer_release_is_offered_with_its_checksums() {
         let body = format!("[{}]", release_json("v0.2.0", false, false));
         match evaluate(&body, "0.1.0").expect("evaluates") {
             Outcome::Available(release) => {
                 assert_eq!(release.version, "0.2.0");
-                assert_eq!(release.download_url, "https://example/v0.2.0.zip");
+                assert_eq!(release.download_url, "https://example/v0.2.0.exe");
+                assert_eq!(release.asset_name, "Moonlight-Setup.exe");
                 assert_eq!(release.size, 1234);
+                assert_eq!(
+                    release.checksums_url.as_deref(),
+                    Some("https://example/v0.2.0.sums")
+                );
             }
             other => panic!("expected an update, got {other:?}"),
         }
@@ -576,8 +464,6 @@ mod tests {
 
     #[test]
     fn drafts_and_prereleases_are_never_pushed() {
-        // Neither was offered to everyone, so neither should update a user who
-        // did not opt in.
         let draft = format!("[{}]", release_json("v9.0.0", true, false));
         let pre = format!("[{}]", release_json("v9.0.0", false, true));
         assert!(matches!(
@@ -616,113 +502,56 @@ mod tests {
     }
 
     #[test]
-    fn a_newer_release_with_no_windows_zip_is_an_error_not_an_offer() {
+    fn a_newer_release_with_no_installer_is_an_error_not_an_offer() {
         let body = r#"[{"tag_name":"v9.0.0","body":"","draft":false,"prerelease":false,
-                       "assets":[{"name":"Moonlight.dmg","browser_download_url":"x","size":1}]}]"#;
-        assert!(matches!(evaluate(body, "0.1.0"), Err(Failure::NoAsset)));
+                       "assets":[{"name":"Moonlight-x86_64.zip","browser_download_url":"x","size":1}]}]"#;
+        assert_eq!(evaluate(body, "0.1.0"), Err(Failure::NoAsset));
+        assert_eq!(evaluate("not json", "0.1.0"), Err(Failure::NoAsset));
     }
 
     #[test]
-    fn junk_json_is_refused() {
-        assert!(matches!(
-            evaluate("not json", "0.1.0"),
-            Err(Failure::NoAsset)
-        ));
-    }
-
-    // The script
-
-    fn script() -> String {
-        swap_script(
-            4242,
-            r"C:\Temp\m.zip",
-            r"C:\Apps\Moonlight",
-            "moonlight.exe",
-        )
-    }
-
-    /// The body of one `:label` branch, up to the next label.
-    ///
-    /// Splitting on the label alone returns the rest of the file, which made an
-    /// earlier version of these tests assert against every branch at once.
-    fn branch(script: &str, label: &str) -> String {
-        let start = script
-            .find(&format!("\n{label}\n"))
-            .expect("the label exists");
-        let rest = &script[start + label.len() + 2..];
-        match rest.find("\n:") {
-            Some(end) => rest[..end].to_string(),
-            None => rest.to_string(),
-        }
-    }
-
-    #[test]
-    fn the_script_waits_for_the_process_before_touching_anything() {
-        let s = script();
-        let wait = s.find("tasklist").expect("waits for the pid");
-        let touch = s.find("move \"%DIR%\"").expect("moves the folder");
-        assert!(
-            wait < touch,
-            "the folder must not be moved before the app has exited"
+    fn the_checksum_list_is_read_the_way_sha256sum_writes_it() {
+        let hash = "a".repeat(64);
+        let other = "b".repeat(64);
+        let sums = format!(
+            "{other}  Moonlight-x86_64.zip\n{hash}  Moonlight-Setup.exe\n{other} *Moonlight.exe\n"
+        );
+        assert_eq!(expected_hash(&sums, "Moonlight-Setup.exe"), Some(hash));
+        assert_eq!(
+            expected_hash(&sums, "moonlight.exe"),
+            Some(other),
+            "binary mode, any case"
+        );
+        assert_eq!(expected_hash(&sums, "Nope.exe"), None);
+        assert_eq!(
+            expected_hash("xyz  Moonlight-Setup.exe", "Moonlight-Setup.exe"),
+            None
         );
     }
 
+    #[cfg(windows)]
     #[test]
-    fn the_script_moves_the_old_install_aside_rather_than_deleting_it() {
-        let s = script();
-        assert!(s.contains(r#"move "%DIR%" "%BACKUP%""#));
-        // And the backup exists before the unpack, so there is something to
-        // restore from.
-        let backup = s.find(r#"move "%DIR%" "%BACKUP%""#).unwrap();
-        let unpack = s.find("Expand-Archive").unwrap();
-        assert!(backup < unpack);
-    }
-
-    #[test]
-    fn a_failed_unpack_restores_the_old_installation() {
-        let s = script();
-        assert!(s.contains(":restore"));
-        assert!(s.contains(r#"move "%BACKUP%" "%DIR%""#));
-        // And starts it, because a working old client beats no client.
-        let restore = branch(&s, ":restore");
-        assert!(restore.contains("start"));
-    }
-
-    #[test]
-    fn the_unpack_is_checked_for_having_produced_the_executable() {
-        // Expand-Archive can succeed on a truncated zip and leave no .exe,
-        // which would otherwise relaunch nothing and delete the backup.
-        let s = script();
-        assert!(s.contains(r#"if not exist "%DIR%\%EXE%" goto restore"#));
-    }
-
-    #[test]
-    fn the_script_gives_up_rather_than_replacing_files_under_a_live_app() {
-        let s = script();
-        assert!(s.contains(":giveup"));
-        let giveup = branch(&s, ":giveup");
-        assert!(
-            !giveup.contains("move \"%DIR%\""),
-            "giving up must not touch the installation"
+    fn the_hash_is_sha256() {
+        let path = std::env::temp_dir().join(format!("ml-hash-{}", uuid::Uuid::new_v4()));
+        std::fs::write(&path, b"abc").unwrap();
+        // The FIPS 180-2 test vector for "abc".
+        assert_eq!(
+            sha256_hex(&path).unwrap(),
+            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
         );
-        assert!(giveup.contains("exit /b 1"), "and must not fall through");
+        let _ = std::fs::remove_file(&path);
     }
 
     #[test]
-    fn the_script_carries_the_values_it_was_given() {
-        let s = script();
-        assert!(s.contains("set \"PID=4242\""));
-        assert!(s.contains(r#"set "ZIP=C:\Temp\m.zip""#));
-        assert!(s.contains(r#"set "DIR=C:\Apps\Moonlight""#));
-        assert!(s.contains(r#"set "BACKUP=C:\Apps\Moonlight.old""#));
-        assert!(s.contains("set \"EXE=moonlight.exe\""));
-    }
-
-    #[test]
-    fn the_script_deletes_itself_on_both_paths() {
-        // It lives in %TEMP%; leaving one behind per update is untidy, and a
-        // stale one that ran halfway is worse.
-        let s = script();
-        assert_eq!(s.matches(r#"del "%~f0""#).count(), 2);
+    fn setup_is_asked_to_run_without_questions_in_the_apps_language() {
+        let ru = installer_arguments(true);
+        assert!(
+            ru.contains("/SILENT") && ru.contains("/SUPPRESSMSGBOXES") && ru.ends_with("/LANG=ru")
+        );
+        assert!(installer_arguments(false).ends_with("/LANG=en"));
+        assert!(
+            !ru.contains("/VERYSILENT"),
+            "its progress window is the only sign it is working"
+        );
     }
 }

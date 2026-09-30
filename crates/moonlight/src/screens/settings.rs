@@ -4,14 +4,16 @@ use iced::widget::{button, column, container, row, text};
 use iced::{Alignment, Border, Element, Length};
 
 use moonlight_core::preferences::AUTO_UPDATE_CHOICES;
-use moonlight_core::{AppLocale, TunnelMode};
+use moonlight_core::{format, AppLocale, TunnelMode};
 use moonlight_design::motion::radii;
 use moonlight_design::typography::{scale, EMPHATIC};
 use moonlight_design::{icon, Icon};
 
 use crate::components;
 use crate::localization::{t, S};
-use crate::{hspace, theme, vspace, Message, Moonlight, Page, TELEGRAM_CHANNEL_URL, VERSION};
+use crate::{
+    hspace, theme, vspace, Message, Moonlight, Page, UpdateState, TELEGRAM_CHANNEL_URL, VERSION,
+};
 
 pub fn view(app: &Moonlight) -> Element<'_, Message> {
     row![
@@ -351,74 +353,77 @@ fn support(app: &Moonlight) -> Element<'_, Message> {
     .into()
 }
 
+/// The version, and the update: one control through every state, and while
+/// one downloads, how far it has got in real units and what the wait ends in.
 fn about(app: &Moonlight) -> Element<'_, Message> {
     let palette = app.palette_of();
     let locale = app.locale_of();
+    let update = app.update_state();
 
-    let status: Element<'_, Message> = match app.update_status() {
-        Some(status) => text(status.to_string())
-            .size(scale::META)
-            .color(palette.text2)
-            .into(),
-        None => text(format!("{} {VERSION}", t(S::Version, locale)))
-            .size(scale::META)
-            .color(palette.text_muted)
-            .into(),
+    let version_line = format!("{} {VERSION}", t(S::Version, locale));
+    let (status, status_color) = match update {
+        UpdateState::UpToDate => (
+            format!("{version_line} · {}", t(S::UpToDate, locale)),
+            palette.text_muted,
+        ),
+        UpdateState::Checking => (t(S::Checking, locale).to_string(), palette.text2),
+        UpdateState::Failed(why) => (why.clone(), palette.danger),
+        _ => (version_line, palette.text_muted),
     };
 
-    // The bar only exists while a download is in flight. An unknown total draws
-    // it full rather than empty: the download is happening either way, and an
-    // empty bar reads as stalled.
-    let progress: Element<'_, Message> = match app.update_progress() {
-        Some(fraction) => container(components::bar(fraction.unwrap_or(1.0), palette, 4.0))
-            .padding([0, 16])
-            .into(),
-        None => vspace(Length::Fixed(0.0)).into(),
+    let (label, action, primary) = match update {
+        UpdateState::Available(release) => (
+            t(S::UpdateTo, locale).replace("{version}", &release.version),
+            Some(Message::StartUpdate),
+            true,
+        ),
+        // Busy: the same control, not pressable, so a second press cannot start
+        // a second download and the page does not move under the pointer.
+        state if state.is_busy() => (t(S::CheckForUpdates, locale).to_string(), None, false),
+        _ => (
+            t(S::CheckForUpdates, locale).to_string(),
+            Some(Message::CheckForUpdates),
+            false,
+        ),
+    };
+    let control = button(
+        text(label)
+            .size(scale::BODY_SM)
+            .font(moonlight_design::ui(EMPHATIC)),
+    )
+    .on_press_maybe(action)
+    .padding([10, 16]);
+    let control = if primary {
+        control.style(move |_, status| theme::accent_button(palette, status))
+    } else {
+        control.style(move |_, status| theme::header_button(palette, status))
     };
 
-    let panel = column![
-        row![
-            column![
-                text("moonlight")
-                    .font(moonlight_design::display())
-                    .size(scale::LEAD)
-                    .color(palette.text),
-                status,
-            ]
-            .spacing(2),
-            hspace(Length::Fill),
-            // Once the installer is on disk the button stops offering to look
-            // again and offers to run it — which is the only thing left to do.
-            if app.update_installer().is_some() {
-                button(
-                    text(t(S::InstallUpdate, locale))
-                        .size(scale::BODY_SM)
-                        .font(moonlight_design::ui(EMPHATIC))
-                        .color(palette.text_on_accent),
-                )
-                .on_press(Message::InstallUpdate)
-                .padding([10, 16])
-                .style(move |_, status| theme::accent_button(palette, status))
-            } else {
-                button(
-                    text(t(S::CheckForUpdates, locale))
-                        .size(scale::BODY_SM)
-                        .font(moonlight_design::ui(EMPHATIC)),
-                )
-                // Pressing it again mid-download would start a second one.
-                .on_press_maybe(
-                    app.update_progress()
-                        .is_none()
-                        .then_some(Message::CheckForUpdates),
-                )
-                .padding([10, 16])
-                .style(move |_, status| theme::header_button(palette, status))
-            },
+    let mut panel = column![row![
+        column![
+            text("moonlight")
+                .font(moonlight_design::display())
+                .size(scale::LEAD)
+                .color(palette.text),
+            text(status).size(scale::META).color(status_color),
         ]
-        .align_y(Alignment::Center)
-        .padding([14, 16]),
-        progress,
-        components::divider(palette),
+        .spacing(2),
+        hspace(Length::Fill),
+        control,
+    ]
+    .align_y(Alignment::Center)
+    .padding([14, 16])];
+
+    if let Some(progress) = progress(app) {
+        panel = panel.push(container(progress).padding(iced::Padding {
+            top: 0.0,
+            right: 16.0,
+            bottom: 14.0,
+            left: 16.0,
+        }));
+    }
+
+    panel = panel.push(components::divider(palette)).push(
         row![
             icon(Icon::Lock, 15.0, palette.accent_ink),
             text(t(S::KeysStayLocal, locale))
@@ -428,7 +433,58 @@ fn about(app: &Moonlight) -> Element<'_, Message> {
         .spacing(8)
         .align_y(Alignment::Center)
         .padding([12, 16]),
-    ];
+    );
 
     components::surface(panel, palette)
+}
+
+/// "Загружаем moonlight 0.12.0", a bar, "12,3 МБ из 36,6 МБ", and what the
+/// wait ends in. A bare spinner here once made someone give up and delete the
+/// app.
+fn progress(app: &Moonlight) -> Option<Element<'_, Message>> {
+    let palette = app.palette_of();
+    let locale = app.locale_of();
+    let line = |content: String, color| text(content).size(scale::META).color(color);
+    let block = match app.update_state() {
+        UpdateState::Downloading {
+            release,
+            received,
+            total,
+        } => {
+            let got = format::bytes(Some(*received as i64), locale);
+            let (fraction, amount) = match total {
+                Some(total) if *total > 0 => (
+                    (*received as f32 / *total as f32).clamp(0.0, 1.0),
+                    format!(
+                        "{got} {} {}",
+                        t(S::UpdateOf, locale),
+                        format::bytes(Some(*total as i64), locale)
+                    ),
+                ),
+                // An unknown total draws the bar full rather than empty: the
+                // download is happening either way, and empty reads as stalled.
+                _ => (1.0, got),
+            };
+            column![
+                line(
+                    t(S::UpdateDownloadingTo, locale).replace("{version}", &release.version),
+                    palette.text
+                ),
+                components::bar(fraction, palette, 6.0),
+                line(amount, palette.text2),
+                line(t(S::UpdateThen, locale).to_string(), palette.text_muted),
+            ]
+        }
+        UpdateState::Verifying(_) => column![
+            line(t(S::UpdateVerifying, locale).to_string(), palette.text),
+            components::bar(1.0, palette, 6.0),
+            line(t(S::UpdateThen, locale).to_string(), palette.text_muted),
+        ],
+        UpdateState::Installing(version) => column![line(
+            t(S::UpdateInstalling, locale).replace("{version}", version),
+            palette.text
+        )],
+        _ => return None,
+    };
+    Some(block.spacing(8).into())
 }

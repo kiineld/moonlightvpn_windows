@@ -92,6 +92,10 @@ Name: "{autodesktop}\{#AppName}";  Filename: "{app}\{#AppExe}"; Tasks: desktopic
 ; that starts it.
 Filename: "{app}\{#HelperExe}"; Parameters: "--install"; StatusMsg: "{cm:RegisteringService}"; Flags: runhidden waituntilterminated; Tasks: tunservice; AfterInstall: CheckServiceInstalled
 Filename: "{app}\{#AppExe}"; Description: "{cm:LaunchProgram,{#AppName}}"; Flags: nowait postinstall skipifsilent
+; An update from inside the app runs Setup silently, and the entry above skips
+; itself then — so the app quit for the update and never came back. This one
+; runs only in that case, as the user rather than as the elevated installer.
+Filename: "{app}\{#AppExe}"; Flags: nowait runasoriginaluser; Check: WizardSilent
 
 [UninstallRun]
 ; Before the files go, or the service is left pointing at a binary that no

@@ -180,6 +180,21 @@ The core also runs with `CREATE_NO_WINDOW`: mihomo is a console application, and
 spawning it normally puts a `conhost` window in front of the user for the life
 of the tunnel.
 
+### Updates
+
+Once per launch the app asks GitHub, quietly: a failed check goes to the log,
+and only a newer version reaches the screen, as a banner in the window's corner.
+Clicking it opens Settings and starts the install there with its progress in
+view — "12,3 МБ из 36,6 МБ", a bar, the version, and what the wait ends in; its
+cross hides it until the next launch. The release's `Moonlight-Setup.exe` is
+checked against the release's `SHA256SUMS.txt` (hashed with Windows' own CNG)
+**before** the app quits, so a damaged download leaves the working version
+running. The app then puts the machine back and quits, and Setup runs silently
+(`/SILENT /SUPPRESSMSGBOXES`), through the shell so its elevation prompt shows:
+it replaces the installation, rolls itself back if anything fails, keeps the
+tasks chosen at first install, and starts the new version as the user. The old
+zip route — a detached batch script unpacking over the install folder — is gone.
+
 ### The tray, one copy, and closing
 
 The app is an iced *daemon*: it outlives its window. Closing the window (the ×
@@ -547,8 +562,10 @@ An honest list, not a roadmap.
   a connect/disconnect, and TUN has never created a Wintun adapter, because CI
   validates those configs without starting them. The Подписка screen has only
   been seen in its empty state, since populating it needs a real subscription.
-- The updater's detached `.cmd` has still never run against a real release; it is
-  exercised only as a string in tests.
+- The in-app update has been proven up to the hand-off: the latest real release
+  downloads and matches its own `SHA256SUMS.txt` (`MOONLIGHT_NETWORK_TESTS=1`).
+  Setup running silently and reopening the new version has not yet been
+  watched; a throwaway release is the way to see it.
 - **The Подписка screen is still the odd one out.** The macOS client always draws
   the plan card, the traffic bar and the device list, reading zeroes before a
   subscription exists; this one collapses to a single "Добавить подписку" row.
