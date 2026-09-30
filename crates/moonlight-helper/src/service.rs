@@ -273,10 +273,10 @@ fn grant_user_control() -> Result<(), Box<dyn std::error::Error>> {
     // subprocess costs nothing.
     const SDDL: &str = concat!(
         "D:",
-        "(A;;CCLCSWRPWPDTLOCRRC;;;SY)",   // SYSTEM: full control
+        "(A;;CCLCSWRPWPDTLOCRRC;;;SY)",         // SYSTEM: full control
         "(A;;CCDCLCSWRPWPDTLOCRSDRCWDWO;;;BA)", // Administrators: everything
-        "(A;;CCLCSWLOCRRC;;;IU)",         // Interactive users: query
-        "(A;;RPWP;;;AU)",                 // Authenticated users: start and stop
+        "(A;;CCLCSWLOCRRC;;;IU)",               // Interactive users: query
+        "(A;;RPWP;;;AU)",                       // Authenticated users: start and stop
     );
 
     let status = std::process::Command::new("sc.exe")

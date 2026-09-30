@@ -5,7 +5,9 @@
 //! value from a running or installed program, which is the job the apps screen
 //! used to do.
 
-use iced::widget::{button, column, container, opaque, pick_list, row, scrollable, text, text_input};
+use iced::widget::{
+    button, column, container, opaque, pick_list, row, scrollable, text, text_input,
+};
 use iced::{Alignment, Background, Border, Color, Element, Length};
 
 use moonlight_core::rules::{self, Family, Kind, Priority};
@@ -81,7 +83,11 @@ pub fn view<'a>(app: &'a Moonlight, editor: &'a RuleEditor) -> Element<'a, Messa
         body = body.push(picker(app, editor));
     }
     if editor.kind.needs_process_matching() {
-        body = body.push(text(t(S::RuleTunOnly, locale)).size(scale::META).color(palette.text_muted));
+        body = body.push(
+            text(t(S::RuleTunOnly, locale))
+                .size(scale::META)
+                .color(palette.text_muted),
+        );
     }
     if let Some(invalid) = &editor.error {
         body = body.push(components::issue_line(
@@ -97,13 +103,29 @@ pub fn view<'a>(app: &'a Moonlight, editor: &'a RuleEditor) -> Element<'a, Messa
         .push(label(S::RulePriority))
         .push(
             row![
-                priority_card(app, editor, Priority::Override, S::PriorityOverride, S::PriorityOverrideSub),
-                priority_card(app, editor, Priority::Extend, S::PriorityExtend, S::PriorityExtendSub),
+                priority_card(
+                    app,
+                    editor,
+                    Priority::Override,
+                    S::PriorityOverride,
+                    S::PriorityOverrideSub
+                ),
+                priority_card(
+                    app,
+                    editor,
+                    Priority::Extend,
+                    S::PriorityExtend,
+                    S::PriorityExtendSub
+                ),
             ]
             .spacing(10),
         );
 
-    let title = if editor.editing.is_some() { S::RulesEdit } else { S::RulesAdd };
+    let title = if editor.editing.is_some() {
+        S::RulesEdit
+    } else {
+        S::RulesAdd
+    };
     let header = row![
         text(t(title, locale))
             .font(moonlight_design::display())
@@ -119,14 +141,25 @@ pub fn view<'a>(app: &'a Moonlight, editor: &'a RuleEditor) -> Element<'a, Messa
 
     let footer = row![
         hspace(Length::Fill),
-        button(text(t(S::Cancel, locale)).size(14.5).font(moonlight_design::ui(EMPHATIC)))
-            .on_press(Message::EditorCancel)
-            .padding([11, 22])
-            .style(move |_, status| theme::header_button(palette, status)),
         button(
-            text(t(if editor.editing.is_some() { S::Save } else { S::RulesAdd }, locale))
+            text(t(S::Cancel, locale))
                 .size(14.5)
                 .font(moonlight_design::ui(EMPHATIC))
+        )
+        .on_press(Message::EditorCancel)
+        .padding([11, 22])
+        .style(move |_, status| theme::header_button(palette, status)),
+        button(
+            text(t(
+                if editor.editing.is_some() {
+                    S::Save
+                } else {
+                    S::RulesAdd
+                },
+                locale
+            ))
+            .size(14.5)
+            .font(moonlight_design::ui(EMPHATIC))
         )
         .on_press(Message::EditorSave)
         .padding([11, 22])
@@ -184,7 +217,11 @@ fn picker<'a>(app: &'a Moonlight, editor: &'a RuleEditor) -> Element<'a, Message
     let by_path = editor.kind == Kind::ProcessPath || editor.kind == Kind::ProcessPathRegex;
     let regex = editor.kind == Kind::ProcessNameRegex || editor.kind == Kind::ProcessPathRegex;
     let pick = move |executable: &str, path: &str| {
-        let value = if by_path && !path.is_empty() { path } else { executable };
+        let value = if by_path && !path.is_empty() {
+            path
+        } else {
+            executable
+        };
         Message::EditorPickApp(if regex {
             format!("(?i)^{}$", regex_escape(value))
         } else {
@@ -203,7 +240,10 @@ fn picker<'a>(app: &'a Moonlight, editor: &'a RuleEditor) -> Element<'a, Message
         button(
             row![
                 tile,
-                text(name).size(13.5).color(palette.text).width(Length::Fill),
+                text(name)
+                    .size(13.5)
+                    .color(palette.text)
+                    .width(Length::Fill),
                 text(executable.clone())
                     .font(moonlight_design::mono())
                     .size(12.0)
@@ -228,7 +268,10 @@ fn picker<'a>(app: &'a Moonlight, editor: &'a RuleEditor) -> Element<'a, Message
     if !running.is_empty() {
         list = list.push(components::overline(t(S::RuleRunning, locale), palette));
         for executable in running {
-            let known = app.apps().iter().find(|a| a.executable.eq_ignore_ascii_case(executable));
+            let known = app
+                .apps()
+                .iter()
+                .find(|a| a.executable.eq_ignore_ascii_case(executable));
             list = list.push(entry(
                 known.map_or_else(|| executable.clone(), |a| a.name.clone()),
                 executable.clone(),
@@ -271,7 +314,10 @@ fn regex_escape(value: &str) -> String {
         .chars()
         .flat_map(|c| {
             let special = r"\.+*?()|[]{}^$".contains(c);
-            special.then_some('\\').into_iter().chain(std::iter::once(c))
+            special
+                .then_some('\\')
+                .into_iter()
+                .chain(std::iter::once(c))
         })
         .collect()
 }
@@ -279,48 +325,57 @@ fn regex_escape(value: &str) -> String {
 fn targets<'a>(app: &'a Moonlight, editor: &'a RuleEditor) -> Element<'a, Message> {
     let palette = app.palette_of();
     let locale = app.locale_of();
-    let option = |name: String, dot: Option<Color>, note: Option<&'static str>| -> Element<'a, Message> {
-        let chosen = editor.target == name;
-        let mut line = row![].spacing(10).align_y(Alignment::Center);
-        if let Some(dot) = dot {
-            line = line.push(
-                container(vspace(Length::Fixed(8.0)))
-                    .width(Length::Fixed(8.0))
-                    .style(move |_| container::Style {
-                        background: Some(Background::Color(dot)),
-                        border: Border {
-                            radius: iced::border::Radius::from(radii::PILL),
+    let option =
+        |name: String, dot: Option<Color>, note: Option<&'static str>| -> Element<'a, Message> {
+            let chosen = editor.target == name;
+            let mut line = row![].spacing(10).align_y(Alignment::Center);
+            if let Some(dot) = dot {
+                line = line.push(
+                    container(vspace(Length::Fixed(8.0)))
+                        .width(Length::Fixed(8.0))
+                        .style(move |_| container::Style {
+                            background: Some(Background::Color(dot)),
+                            border: Border {
+                                radius: iced::border::Radius::from(radii::PILL),
+                                ..Default::default()
+                            },
                             ..Default::default()
-                        },
-                        ..Default::default()
-                    }),
+                        }),
+                );
+            }
+            line = line.push(
+                text(name.clone())
+                    .size(14.0)
+                    .font(moonlight_design::ui(EMPHATIC))
+                    .color(palette.text)
+                    .width(Length::Fill),
             );
-        }
-        line = line.push(
-            text(name.clone())
-                .size(14.0)
-                .font(moonlight_design::ui(EMPHATIC))
-                .color(palette.text)
-                .width(Length::Fill),
-        );
-        if let Some(note) = note {
-            line = line.push(text(note).size(12.5).color(palette.text_muted));
-        }
-        if chosen {
-            line = line.push(icon(Icon::Check, 15.0, palette.text));
-        }
-        button(line)
-            .on_press(Message::EditorTarget(name))
-            .padding([9, 12])
-            .width(Length::Fill)
-            .style(move |_, status| theme::row_button(palette, chosen, status))
-            .into()
-    };
+            if let Some(note) = note {
+                line = line.push(text(note).size(12.5).color(palette.text_muted));
+            }
+            if chosen {
+                line = line.push(icon(Icon::Check, 15.0, palette.text));
+            }
+            button(line)
+                .on_press(Message::EditorTarget(name))
+                .padding([9, 12])
+                .width(Length::Fill)
+                .style(move |_, status| theme::row_button(palette, chosen, status))
+                .into()
+        };
 
     let mut list = column![
         components::overline(t(S::TargetBuiltIn, locale), palette),
-        option(rules::DIRECT.into(), Some(palette.st_up), Some(t(S::TargetDirect, locale))),
-        option(rules::REJECT.into(), Some(palette.danger), Some(t(S::TargetReject, locale))),
+        option(
+            rules::DIRECT.into(),
+            Some(palette.st_up),
+            Some(t(S::TargetDirect, locale))
+        ),
+        option(
+            rules::REJECT.into(),
+            Some(palette.danger),
+            Some(t(S::TargetReject, locale))
+        ),
     ]
     .spacing(4);
     if !app.routing_groups().is_empty() {
@@ -336,7 +391,11 @@ fn targets<'a>(app: &'a Moonlight, editor: &'a RuleEditor) -> Element<'a, Messag
         || app.routing_groups().contains(&editor.target);
     if !known && !editor.target.is_empty() {
         list = list.push(option(editor.target.clone(), Some(palette.danger), None));
-        list = list.push(text(t(S::TargetMissing, locale)).size(scale::META).color(palette.danger));
+        list = list.push(
+            text(t(S::TargetMissing, locale))
+                .size(scale::META)
+                .color(palette.danger),
+        );
     }
 
     container(
@@ -377,7 +436,11 @@ fn priority_card<'a>(
         border: Border {
             radius: iced::border::Radius::from(radii::PILL),
             width: 2.0,
-            color: if chosen { palette.text } else { palette.text_muted },
+            color: if chosen {
+                palette.text
+            } else {
+                palette.text_muted
+            },
         },
         ..Default::default()
     });
@@ -413,7 +476,10 @@ mod tests {
         // And what it makes is a pattern the core's grammar accepts.
         let pattern = format!("(?i)^{}$", regex_escape("my.app(1).exe"));
         assert_eq!(
-            moonlight_core::rules::validate(moonlight_core::rules::Kind::ProcessNameRegex, &pattern),
+            moonlight_core::rules::validate(
+                moonlight_core::rules::Kind::ProcessNameRegex,
+                &pattern
+            ),
             None
         );
     }

@@ -41,8 +41,16 @@ pub fn register() -> bool {
     let entries = [
         (root.clone(), "", "URL:moonlight".to_string()),
         (root.clone(), "URL Protocol", String::new()),
-        (format!(r"{root}\DefaultIcon"), "", format!("\"{}\",0", executable.display())),
-        (format!(r"{root}\shell\open\command"), "", open_command(&executable)),
+        (
+            format!(r"{root}\DefaultIcon"),
+            "",
+            format!("\"{}\",0", executable.display()),
+        ),
+        (
+            format!(r"{root}\shell\open\command"),
+            "",
+            open_command(&executable),
+        ),
     ];
     entries.iter().all(|(path, name, value)| unsafe {
         let mut key = HKEY::default();
@@ -207,8 +215,13 @@ mod tests {
 
     #[test]
     fn windows_hands_the_link_over_as_one_quoted_argument() {
-        let command = open_command(std::path::Path::new(r"C:\Program Files\moonlight\moonlight.exe"));
-        assert_eq!(command, r#""C:\Program Files\moonlight\moonlight.exe" "%1""#);
+        let command = open_command(std::path::Path::new(
+            r"C:\Program Files\moonlight\moonlight.exe",
+        ));
+        assert_eq!(
+            command,
+            r#""C:\Program Files\moonlight\moonlight.exe" "%1""#
+        );
     }
 
     #[test]

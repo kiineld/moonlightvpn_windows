@@ -9,9 +9,11 @@ use moonlight_design::typography::{scale, EMPHATIC};
 use moonlight_design::Icon;
 
 use crate::components;
-use crate::theme;
 use crate::localization::{t, S};
-use crate::{hspace, localization, vspace, Message, Moonlight, Page, CABINET_URL, TELEGRAM_BOT_URL};
+use crate::theme;
+use crate::{
+    hspace, localization, vspace, Message, Moonlight, Page, CABINET_URL, TELEGRAM_BOT_URL,
+};
 
 pub fn view(app: &Moonlight) -> Element<'_, Message> {
     let palette = app.palette_of();
@@ -207,8 +209,11 @@ fn actions(app: &Moonlight) -> iced::widget::Column<'_, Message> {
     .spacing(10);
     if let Some(issue) = app.refresh_issue() {
         refresh = refresh.push(
-            container(components::issue_line(localization::issue(issue, locale), palette))
-                .padding([0, 6]),
+            container(components::issue_line(
+                localization::issue(issue, locale),
+                palette,
+            ))
+            .padding([0, 6]),
         );
     }
 

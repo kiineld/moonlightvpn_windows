@@ -72,7 +72,9 @@ mod imp {
 
         let icon = info.hIcon;
         let pixels = decode(icon);
-        unsafe { let _ = DestroyIcon(icon); }
+        unsafe {
+            let _ = DestroyIcon(icon);
+        }
         pixels.filter(|rgba| !rgba.is_blank())
     }
 
@@ -150,7 +152,9 @@ mod imp {
                 DIB_RGB_COLORS,
             )
         };
-        unsafe { let _ = DeleteDC(dc); }
+        unsafe {
+            let _ = DeleteDC(dc);
+        }
         if scanned == 0 {
             return None;
         }

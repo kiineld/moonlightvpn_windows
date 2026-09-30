@@ -26,7 +26,6 @@ pub const PROBE_URL: &str = "http://cp.cloudflare.com/generate_204";
 pub const DEFAULT_SELECTOR: &str = "MOONLIGHT";
 pub const DEFAULT_AUTO_GROUP: &str = "MOONLIGHT-AUTO";
 
-
 #[derive(Debug, Clone)]
 pub struct Overrides {
     pub controller_port: u16,
@@ -153,8 +152,10 @@ pub fn build(panel_yaml: &str, overrides: &Overrides) -> Result<String, Failure>
 
     // The user's rules may name any group or server the config has, or the
     // two built-in targets; a rule naming anything else is left out.
-    let mut targets: std::collections::HashSet<String> =
-        [rules::DIRECT, rules::REJECT].into_iter().map(String::from).collect();
+    let mut targets: std::collections::HashSet<String> = [rules::DIRECT, rules::REJECT]
+        .into_iter()
+        .map(String::from)
+        .collect();
     for entry in groups.iter().chain(proxies.iter()) {
         if let Some(name) = entry.get(key("name")).and_then(Value::as_str) {
             targets.insert(name.to_string());
@@ -355,7 +356,6 @@ pub fn dns_block(existing: Option<Mapping>) -> Mapping {
     dns
 }
 
-
 /// The order the panel itself lists its servers in.
 ///
 /// mihomo hands back a selector's members in *its* order — the group's explicit
@@ -376,8 +376,16 @@ pub fn server_descriptions(yaml: &str) -> std::collections::HashMap<String, Stri
     let Ok(root) = serde_yaml::from_str::<Value>(yaml) else {
         return descriptions;
     };
-    for (section, field) in [("proxies", "serverDescription"), ("proxy-groups", "description")] {
-        for entry in root.get(section).and_then(Value::as_sequence).into_iter().flatten() {
+    for (section, field) in [
+        ("proxies", "serverDescription"),
+        ("proxy-groups", "description"),
+    ] {
+        for entry in root
+            .get(section)
+            .and_then(Value::as_sequence)
+            .into_iter()
+            .flatten()
+        {
             let name = entry.get("name").and_then(Value::as_str);
             let text = entry.get(field).and_then(Value::as_str).map(str::trim);
             if let (Some(name), Some(text)) = (name, text.filter(|t| !t.is_empty())) {
@@ -777,7 +785,12 @@ rules:
         let mut o = overrides();
         o.routing_rules = vec![
             RoutingRule::new(Kind::DomainSuffix, "a.com", "DIRECT", Priority::Override),
-            RoutingRule::new(Kind::DomainSuffix, "b.com", "PANEL-SELECT", Priority::Extend),
+            RoutingRule::new(
+                Kind::DomainSuffix,
+                "b.com",
+                "PANEL-SELECT",
+                Priority::Extend,
+            ),
             RoutingRule::new(Kind::DomainSuffix, "c.com", "Node B", Priority::Extend),
             // A group the panel dropped: left out, or the core refuses it all.
             RoutingRule::new(Kind::DomainSuffix, "d.com", "Gone", Priority::Override),
@@ -798,14 +811,21 @@ rules:
 
         o.mode = TunnelMode::Tun;
         let tun = build(PANEL, &o).expect("builds");
-        assert_eq!(rules_of(&parse(&tun))[1], "PROCESS-NAME,a.exe,DIRECT", "in the user's order");
+        assert_eq!(
+            rules_of(&parse(&tun))[1],
+            "PROCESS-NAME,a.exe,DIRECT",
+            "in the user's order"
+        );
     }
 
     #[test]
     fn the_rules_page_reads_the_panels_groups_and_rules() {
         let (groups, rules) = routing_inputs(PANEL);
         assert_eq!(groups, vec!["PANEL-SELECT"]);
-        assert_eq!(rules, vec!["GEOSITE,category-ru,DIRECT", "MATCH,PANEL-SELECT"]);
+        assert_eq!(
+            rules,
+            vec!["GEOSITE,category-ru,DIRECT", "MATCH,PANEL-SELECT"]
+        );
         let (fallback, _) = routing_inputs("proxies:\n  - {name: A, type: ss}\n");
         assert_eq!(fallback, vec![DEFAULT_SELECTOR, DEFAULT_AUTO_GROUP]);
     }
@@ -814,7 +834,10 @@ rules:
     fn the_services_notes_are_read_from_proxies_and_groups() {
         let yaml = "proxies:\n  - {name: Poland LTE 1, type: vless, serverDescription: ' Доступность во время БС 🌟 '}\n  - {name: Plain, type: vless}\nproxy-groups:\n  - {name: Auto, type: url-test, description: Лучший, proxies: [Plain]}\n";
         let notes = server_descriptions(yaml);
-        assert_eq!(notes.get("Poland LTE 1").map(String::as_str), Some("Доступность во время БС 🌟"));
+        assert_eq!(
+            notes.get("Poland LTE 1").map(String::as_str),
+            Some("Доступность во время БС 🌟")
+        );
         assert_eq!(notes.get("Auto").map(String::as_str), Some("Лучший"));
         assert!(!notes.contains_key("Plain"));
     }

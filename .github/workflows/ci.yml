@@ -75,6 +75,15 @@ jobs:
       - name: Unit tests
         run: cargo test --workspace --lib --bins
 
+      # `--install` copies the core and Wintun from the helper's own folder into
+      # the service's, as the installer lays them out. Built here, the helper
+      # sits in target\debug with neither beside it, and the service test failed
+      # at install on every run.
+      - name: Put the core beside the helper
+        run: |
+          Copy-Item resources\mihomo\mihomo.exe target\debug\
+          Copy-Item resources\mihomo\wintun.dll target\debug\
+
       # --test-threads=1 because these bind a controller port, write HKCU and
       # install a service; two at once would fight over all three.
       - name: Integration tests

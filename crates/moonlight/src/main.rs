@@ -836,7 +836,11 @@ impl Moonlight {
                 self.save();
             }
             Message::HideRefreshNote(id) => {
-                if self.refresh_note.as_ref().is_some_and(|(shown, _)| *shown == id) {
+                if self
+                    .refresh_note
+                    .as_ref()
+                    .is_some_and(|(shown, _)| *shown == id)
+                {
                     self.refresh_note = None;
                 }
             }
@@ -980,7 +984,11 @@ impl Moonlight {
                         priority: editor.priority,
                         enabled: true,
                     };
-                    match self.rules_draft.iter_mut().find(|r| Some(r.id) == editor.editing) {
+                    match self
+                        .rules_draft
+                        .iter_mut()
+                        .find(|r| Some(r.id) == editor.editing)
+                    {
                         Some(existing) => {
                             let enabled = existing.enabled;
                             *existing = RoutingRule { enabled, ..rule };
@@ -1028,7 +1036,9 @@ impl Moonlight {
                 return Task::batch(
                     executables
                         .chunks(ICON_BATCH)
-                        .map(|batch| Task::perform(load_icons(batch.to_vec()), Message::IconsLoaded))
+                        .map(|batch| {
+                            Task::perform(load_icons(batch.to_vec()), Message::IconsLoaded)
+                        })
                         .collect::<Vec<_>>(),
                 );
             }
@@ -1036,7 +1046,11 @@ impl Moonlight {
                 for (executable, rgba) in icons {
                     self.app_icons.insert(
                         executable,
-                        iced::widget::image::Handle::from_rgba(rgba.width, rgba.height, rgba.pixels),
+                        iced::widget::image::Handle::from_rgba(
+                            rgba.width,
+                            rgba.height,
+                            rgba.pixels,
+                        ),
                     );
                 }
             }
@@ -1117,10 +1131,9 @@ impl Moonlight {
                     //
                     // Long enough to read the line, short enough that it does
                     // not look hung.
-                    return Task::perform(
-                        tokio::time::sleep(Duration::from_millis(1200)),
-                        |()| Message::Quit,
-                    );
+                    return Task::perform(tokio::time::sleep(Duration::from_millis(1200)), |()| {
+                        Message::Quit
+                    });
                 }
             }
             Message::OpenUrl(url) => open_url(url),
@@ -1219,10 +1232,9 @@ impl Moonlight {
                 // backstop for a controller that never answers — a window that
                 // will not close is worse than a missed restore.
                 send(Command::Shutdown);
-                return Task::perform(
-                    tokio::time::sleep(Duration::from_secs(6)),
-                    |()| Message::ForceClose,
-                );
+                return Task::perform(tokio::time::sleep(Duration::from_secs(6)), |()| {
+                    Message::ForceClose
+                });
             }
             // The backstop for a controller that never answered. Not
             // `iced::exit()`: that still waits for the runtime, which is
@@ -1430,19 +1442,23 @@ impl Moonlight {
         // Placed in physical pixels against the work area — beside the click,
         // above a taskbar at the bottom or below one at the top — and handed
         // to the window in logical ones.
-        let position = moonlight_core::tray::work_area().map(|(left, top, right, bottom, scale)| {
-            let (w, h, gap) = (width * scale, height * scale, 12.0 * scale);
-            let x = (click.x as f32 - w / 2.0).clamp(left as f32 + gap, right as f32 - w - gap);
-            let y = if (click.y - top) < (bottom - click.y) {
-                top as f32 + gap
-            } else {
-                bottom as f32 - h - gap
-            };
-            iced::Point::new(x / scale, y / scale)
-        });
+        let position =
+            moonlight_core::tray::work_area().map(|(left, top, right, bottom, scale)| {
+                let (w, h, gap) = (width * scale, height * scale, 12.0 * scale);
+                let x = (click.x as f32 - w / 2.0).clamp(left as f32 + gap, right as f32 - w - gap);
+                let y = if (click.y - top) < (bottom - click.y) {
+                    top as f32 + gap
+                } else {
+                    bottom as f32 - h - gap
+                };
+                iced::Point::new(x / scale, y / scale)
+            });
         let (id, opened) = iced::window::open(iced::window::Settings {
             size: iced::Size::new(width, height),
-            position: position.map_or(iced::window::Position::Default, iced::window::Position::Specific),
+            position: position.map_or(
+                iced::window::Position::Default,
+                iced::window::Position::Specific,
+            ),
             decorations: false,
             resizable: false,
             level: iced::window::Level::AlwaysOnTop,
@@ -1454,13 +1470,18 @@ impl Moonlight {
             ..Default::default()
         });
         self.tray_window = Some(id);
-        Task::batch([opened.map(|_| Message::Ignore), iced::window::gain_focus(id)])
+        Task::batch([
+            opened.map(|_| Message::Ignore),
+            iced::window::gain_focus(id),
+        ])
     }
 
     fn window_event(&mut self, id: iced::window::Id, event: iced::window::Event) -> Task<Message> {
         use iced::window::Event;
         match event {
-            Event::CloseRequested if Some(id) == self.main_window => self.update(Message::CloseWindow),
+            Event::CloseRequested if Some(id) == self.main_window => {
+                self.update(Message::CloseWindow)
+            }
             Event::CloseRequested => iced::window::close(id),
             // The panel goes when the user looks elsewhere, unless pinned.
             Event::Unfocused if Some(id) == self.tray_window && !self.tray_pinned => {
@@ -1505,8 +1526,10 @@ impl Moonlight {
                 due.push((
                     format!("expiring-{expire}-{days}"),
                     S::NotifyExpiringTitle,
-                    t(S::NotifyExpiringBody, locale)
-                        .replace("{days}", &moonlight_core::format::time_left(Some(expire), locale)),
+                    t(S::NotifyExpiringBody, locale).replace(
+                        "{days}",
+                        &moonlight_core::format::time_left(Some(expire), locale),
+                    ),
                 ));
             }
         }
@@ -1524,11 +1547,16 @@ impl Moonlight {
                     S::NotifyTrafficLowTitle,
                     t(S::NotifyTrafficLowBody, locale)
                         .replace("{left}", &moonlight_core::format::bytes(Some(left), locale))
-                        .replace("{total}", &moonlight_core::format::bytes(Some(total), locale)),
+                        .replace(
+                            "{total}",
+                            &moonlight_core::format::bytes(Some(total), locale),
+                        ),
                 ));
             } else {
                 // Topped up: the next time it runs low is a new warning.
-                self.preferences.sent_alerts.retain(|id| !id.starts_with("traffic-"));
+                self.preferences
+                    .sent_alerts
+                    .retain(|id| !id.starts_with("traffic-"));
             }
         }
 
@@ -1706,7 +1734,9 @@ impl Moonlight {
         // own borders.
         let framed = screens::resize::frame(window.into());
         match (&self.link_prompt, &self.rule_editor) {
-            (Some(prompt), _) => iced::widget::stack![framed, screens::link::view(self, prompt)].into(),
+            (Some(prompt), _) => {
+                iced::widget::stack![framed, screens::link::view(self, prompt)].into()
+            }
             (None, Some(editor)) => {
                 iced::widget::stack![framed, screens::rule_editor::view(self, editor)].into()
             }
@@ -1722,8 +1752,12 @@ fn drag_events(
 ) -> Option<Message> {
     use iced::mouse;
     match event {
-        iced::Event::Mouse(mouse::Event::CursorMoved { position }) => Some(Message::DragMove(position.y)),
-        iced::Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left)) => Some(Message::DragEnd),
+        iced::Event::Mouse(mouse::Event::CursorMoved { position }) => {
+            Some(Message::DragMove(position.y))
+        }
+        iced::Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left)) => {
+            Some(Message::DragEnd)
+        }
         _ => None,
     }
 }
@@ -1764,7 +1798,6 @@ fn controller_events() -> impl iced::futures::Stream<Item = Message> {
         Some((Message::Controller(event), receiver))
     })
 }
-
 
 fn send(command: Command) {
     if let Some(sender) = COMMANDS.get() {
@@ -1952,52 +1985,56 @@ fn elevate(_argument: &str) -> Result<(), String> {
 fn update_stream(locale: AppLocale) -> impl futures_util::Stream<Item = Message> {
     use moonlight_core::updater::{self, Outcome};
 
-    iced::stream::channel(16, move |mut output: iced::futures::channel::mpsc::Sender<Message>| async move {
-        use futures_util::SinkExt;
+    iced::stream::channel(
+        16,
+        move |mut output: iced::futures::channel::mpsc::Sender<Message>| async move {
+            use futures_util::SinkExt;
 
-        let say = |text: String| Message::UpdateChecked((text, false));
+            let say = |text: String| Message::UpdateChecked((text, false));
 
-        let release = match updater::check(RELEASES_API, VERSION).await {
-            Err(error) => {
-                let _ = output.send(say(error.to_string())).await;
-                return;
-            }
-            Ok(Outcome::UpToDate { current }) => {
-                let text = match locale {
-                    AppLocale::Ru => format!("Установлена последняя версия ({current})"),
-                    AppLocale::En => format!("You are on the latest version ({current})"),
-                };
-                let _ = output.send(say(text)).await;
-                return;
-            }
-            Ok(Outcome::Available(release)) => release,
-        };
+            let release = match updater::check(RELEASES_API, VERSION).await {
+                Err(error) => {
+                    let _ = output.send(say(error.to_string())).await;
+                    return;
+                }
+                Ok(Outcome::UpToDate { current }) => {
+                    let text = match locale {
+                        AppLocale::Ru => format!("Установлена последняя версия ({current})"),
+                        AppLocale::En => format!("You are on the latest version ({current})"),
+                    };
+                    let _ = output.send(say(text)).await;
+                    return;
+                }
+                Ok(Outcome::Available(release)) => release,
+            };
 
-        // Named for the version, so a stale installer from a previous check is
-        // never mistaken for this one.
-        let target = std::env::temp_dir().join(format!("Moonlight-Setup-{}.exe", release.version));
+            // Named for the version, so a stale installer from a previous check is
+            // never mistaken for this one.
+            let target =
+                std::env::temp_dir().join(format!("Moonlight-Setup-{}.exe", release.version));
 
-        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<Option<f32>>();
-        let mut forwarding = output.clone();
-        let pump = tokio::spawn(async move {
-            while let Some(fraction) = rx.recv().await {
-                let _ = forwarding.send(Message::UpdateProgress(fraction)).await;
-            }
-        });
+            let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<Option<f32>>();
+            let mut forwarding = output.clone();
+            let pump = tokio::spawn(async move {
+                while let Some(fraction) = rx.recv().await {
+                    let _ = forwarding.send(Message::UpdateProgress(fraction)).await;
+                }
+            });
 
-        let outcome =
-            updater::download_with_progress(&release.download_url, &target, move |fraction| {
-                let _ = tx.send(fraction);
-            })
-            .await;
-        pump.abort();
+            let outcome =
+                updater::download_with_progress(&release.download_url, &target, move |fraction| {
+                    let _ = tx.send(fraction);
+                })
+                .await;
+            pump.abort();
 
-        let message = match outcome {
-            Err(error) => say(error.to_string()),
-            Ok(()) => Message::UpdateReady(target),
-        };
-        let _ = output.send(message).await;
-    })
+            let message = match outcome {
+                Err(error) => say(error.to_string()),
+                Ok(()) => Message::UpdateReady(target),
+            };
+            let _ = output.send(message).await;
+        },
+    )
 }
 
 /// Returns the line to show, and whether the app must now exit so the swap
@@ -2191,7 +2228,9 @@ impl Moonlight {
         self.refresh_issue.as_ref()
     }
     pub fn refresh_note(&self) -> Option<(u64, &Result<(), Issue>)> {
-        self.refresh_note.as_ref().map(|(id, outcome)| (*id, outcome))
+        self.refresh_note
+            .as_ref()
+            .map(|(id, outcome)| (*id, outcome))
     }
     pub fn tray_pinned(&self) -> bool {
         self.tray_pinned
@@ -2429,13 +2468,16 @@ mod tests {
 
     #[test]
     fn the_sidebar_carries_the_five_destinations_the_macos_client_does() {
-        assert_eq!(Page::SIDEBAR, [
-            Page::Connect,
-            Page::Subscription,
-            Page::Rules,
-            Page::Connections,
-            Page::Settings,
-        ]);
+        assert_eq!(
+            Page::SIDEBAR,
+            [
+                Page::Connect,
+                Page::Subscription,
+                Page::Rules,
+                Page::Connections,
+                Page::Settings,
+            ]
+        );
         // Logs is the diagnostic and stays under Settings; Import is reached
         // from Subscription.
         for page in [Page::Logs, Page::Import] {
@@ -2593,14 +2635,27 @@ mod tests {
     fn a_dragged_rule_lands_where_it_was_dropped() {
         let mut app = app();
         for value in ["a.com", "b.com", "c.com"] {
-            app.rules_draft.push(RoutingRule::new(Kind::Domain, value, rules::DIRECT, Priority::Override));
+            app.rules_draft.push(RoutingRule::new(
+                Kind::Domain,
+                value,
+                rules::DIRECT,
+                Priority::Override,
+            ));
         }
         let _ = app.update(Message::DragStart(0));
         let _ = app.update(Message::DragMove(100.0));
         // Two rows down.
         let _ = app.update(Message::DragMove(100.0 + 2.0 * screens::rules::ROW_HEIGHT));
-        let preview: Vec<&str> = app.rules_in_order().iter().map(|r| r.value.as_str()).collect();
-        assert_eq!(preview, ["b.com", "c.com", "a.com"], "the list shows where it will land");
+        let preview: Vec<&str> = app
+            .rules_in_order()
+            .iter()
+            .map(|r| r.value.as_str())
+            .collect();
+        assert_eq!(
+            preview,
+            ["b.com", "c.com", "a.com"],
+            "the list shows where it will land"
+        );
         let _ = app.update(Message::DragEnd);
         let order: Vec<&str> = app.rules_draft.iter().map(|r| r.value.as_str()).collect();
         assert_eq!(order, ["b.com", "c.com", "a.com"]);
@@ -2688,9 +2743,13 @@ mod tests {
     #[test]
     fn the_window_title_carries_the_connection_state() {
         let mut app = app();
-        assert!(app.title_text().contains(t(S::StateDisconnected, AppLocale::Ru)));
+        assert!(app
+            .title_text()
+            .contains(t(S::StateDisconnected, AppLocale::Ru)));
         app.state = ConnectionState::Connected;
-        assert!(app.title_text().contains(t(S::StateConnected, AppLocale::Ru)));
+        assert!(app
+            .title_text()
+            .contains(t(S::StateConnected, AppLocale::Ru)));
     }
 
     /// Builds every screen's widget tree.
@@ -2728,7 +2787,8 @@ mod tests {
                     "Gone group",
                     Priority::Extend,
                 )];
-                app.profile_rules = vec!["AND,((DOMAIN,x),(NETWORK,udp)),P".into(), "MATCH,P".into()];
+                app.profile_rules =
+                    vec!["AND,((DOMAIN,x),(NETWORK,udp)),P".into(), "MATCH,P".into()];
                 app.logs = vec![LogEntry::app("ERROR", "boom")];
                 app.connections = vec![Connection {
                     id: "1".into(),

@@ -124,7 +124,10 @@ pub enum Event {
     Refreshed(Result<(), Issue>),
     /// What the rules page offers and shows: the subscription's groups, which
     /// a rule can target, and its own rules.
-    RoutingInputs { groups: Vec<String>, rules: Vec<String> },
+    RoutingInputs {
+        groups: Vec<String>,
+        rules: Vec<String>,
+    },
     /// The user's rules were applied, or refused and left as they were.
     RulesApplied(Result<(), Issue>),
     /// Everything that had to be put back has been: the proxy settings are
@@ -450,7 +453,8 @@ impl Controller {
     }
 
     async fn fetch_subscription_inner(&mut self, url: String, adopting: bool) -> Result<(), Issue> {
-        let client = SubscriptionClient::new(self.device_identity()).map_err(|e| Issue::from(&e))?;
+        let client =
+            SubscriptionClient::new(self.device_identity()).map_err(|e| Issue::from(&e))?;
         let fetched = client.fetch(&url).await.map_err(|failure| {
             self.narrate("WARNING", format!("Subscription update failed: {failure}"));
             Issue::from(&failure)
@@ -476,16 +480,24 @@ impl Controller {
             None => fetched.info.clone(),
         };
         if info.title.is_none() {
-            info.title = self.preferences.cached_info.as_ref().and_then(|i| i.title.clone());
+            info.title = self
+                .preferences
+                .cached_info
+                .as_ref()
+                .and_then(|i| i.title.clone());
         }
         if let Err(error) = std::fs::write(preferences::subscription_path(), &fetched.yaml) {
-            self.narrate("WARNING", format!("Could not cache the subscription: {error}"));
+            self.narrate(
+                "WARNING",
+                format!("Could not cache the subscription: {error}"),
+            );
         }
         self.preferences.cached_info = Some(info.clone());
         self.preferences.last_refresh = Some(time::OffsetDateTime::now_utc().unix_timestamp());
         self.save();
 
-        self.redactions.set(redact::secrets(Some(&url), Some(&fetched.yaml)));
+        self.redactions
+            .set(redact::secrets(Some(&url), Some(&fetched.yaml)));
         self.narrate(
             "INFO",
             format!(
@@ -523,7 +535,10 @@ impl Controller {
             let _ = std::fs::create_dir_all(parent);
         }
         if let Err(error) = std::fs::write(&path, &config) {
-            self.fail(Issue::CoreFailed, format!("Could not write the core config: {error}"));
+            self.fail(
+                Issue::CoreFailed,
+                format!("Could not write the core config: {error}"),
+            );
             return;
         }
 
@@ -561,7 +576,10 @@ impl Controller {
         if !crate::geodata::present(&directory) {
             self.narrate("INFO", "Downloading geo databases (one time, ~15 MB)");
         }
-        if let Err(error) = self.ensure_geodata(&directory, &self.preferences.routing_rules).await {
+        if let Err(error) = self
+            .ensure_geodata(&directory, &self.preferences.routing_rules)
+            .await
+        {
             return self.fail(
                 Issue::CoreFailed,
                 format!("Could not download the geo databases. {error}"),
@@ -832,7 +850,10 @@ impl Controller {
             let _ = std::fs::create_dir_all(parent);
         }
         if let Err(error) = std::fs::write(&path, &config) {
-            return self.fail(Issue::CoreFailed, format!("Could not write the core config: {error}"));
+            return self.fail(
+                Issue::CoreFailed,
+                format!("Could not write the core config: {error}"),
+            );
         }
 
         match self.preferences.mode {
@@ -1076,7 +1097,8 @@ impl Controller {
     /// off. The old settings are then forgotten, so they cannot route traffic
     /// with no screen left to show them.
     fn carry_over_apps_screen(&mut self) {
-        if self.preferences.split_rules.is_empty() && self.preferences.split_mode == SplitMode::All {
+        if self.preferences.split_rules.is_empty() && self.preferences.split_mode == SplitMode::All
+        {
             return;
         }
         let Some(panel) = self.panel_yaml.as_deref() else {
@@ -1111,7 +1133,10 @@ impl Controller {
         rules: &[RoutingRule],
     ) -> Result<bool, String> {
         let downloaded = crate::geodata::ensure(directory).await?;
-        if rules.iter().any(|r| r.enabled && r.kind == rules::Kind::IpAsn) {
+        if rules
+            .iter()
+            .any(|r| r.enabled && r.kind == rules::Kind::IpAsn)
+        {
             crate::geodata::ensure_asn(directory).await?;
         }
         Ok(downloaded)
@@ -1136,7 +1161,10 @@ impl Controller {
                 Ok(config) => {
                     let directory = preferences::core_data_directory();
                     if let Err(error) = self.ensure_geodata(&directory, &rules).await {
-                        self.narrate("WARNING", format!("Could not fetch a geo database: {error}"));
+                        self.narrate(
+                            "WARNING",
+                            format!("Could not fetch a geo database: {error}"),
+                        );
                     }
                     let path = directory.join("rules-check.yaml");
                     match std::fs::write(&path, config) {
@@ -1195,7 +1223,9 @@ impl Controller {
                 }
             }
             // No core answering: the next one is built with the mode anyway.
-            Err(error) => self.narrate("WARNING", format!("Could not switch routing mode: {error}")),
+            Err(error) => {
+                self.narrate("WARNING", format!("Could not switch routing mode: {error}"))
+            }
         }
     }
 

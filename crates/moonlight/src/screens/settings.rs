@@ -403,13 +403,13 @@ fn about(app: &Moonlight) -> Element<'_, Message> {
                 button(
                     text(t(S::CheckForUpdates, locale))
                         .size(scale::BODY_SM)
-                        .font(moonlight_design::ui(EMPHATIC))
+                        .font(moonlight_design::ui(EMPHATIC)),
                 )
                 // Pressing it again mid-download would start a second one.
                 .on_press_maybe(
                     app.update_progress()
                         .is_none()
-                        .then_some(Message::CheckForUpdates)
+                        .then_some(Message::CheckForUpdates),
                 )
                 .padding([10, 16])
                 .style(move |_, status| theme::header_button(palette, status))

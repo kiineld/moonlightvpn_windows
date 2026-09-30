@@ -42,8 +42,8 @@ fn machine_identifier() -> Option<String> {
     use windows::core::PCWSTR;
     use windows::Win32::Foundation::ERROR_SUCCESS;
     use windows::Win32::System::Registry::{
-        RegCloseKey, RegOpenKeyExW, RegQueryValueExW, HKEY, HKEY_LOCAL_MACHINE,
-        KEY_QUERY_VALUE, KEY_WOW64_64KEY, REG_VALUE_TYPE,
+        RegCloseKey, RegOpenKeyExW, RegQueryValueExW, HKEY, HKEY_LOCAL_MACHINE, KEY_QUERY_VALUE,
+        KEY_WOW64_64KEY, REG_VALUE_TYPE,
     };
 
     fn wide(text: &str) -> Vec<u16> {

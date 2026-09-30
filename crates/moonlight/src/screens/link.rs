@@ -24,46 +24,46 @@ pub fn view<'a>(app: &'a Moonlight, prompt: &'a LinkPrompt) -> Element<'a, Messa
     let palette = app.palette_of();
     let locale = app.locale_of();
 
-    let (title, body, note, actions): (S, String, Option<S>, Vec<Action>) =
-        match prompt {
-            LinkPrompt::Ask(link) => (
-                S::LinkTitle,
-                t(S::LinkBody, locale).to_string(),
-                replacement_note(app, link),
-                vec![
-                    (S::Cancel, Some(Message::LinkDismiss), false),
-                    (S::LinkAdd, Some(Message::LinkAdd), true),
-                ],
-            ),
-            // No buttons: the line says what is happening, and it ends on
-            // its own in a moment either way.
-            LinkPrompt::Adding(_) => (
-                S::LinkTitle,
-                t(S::LinkAdding, locale).to_string(),
-                None,
-                Vec::new(),
-            ),
-            LinkPrompt::Failed(_, issue) => (
-                S::LinkFailedTitle,
-                localization::issue(issue, locale),
-                None,
-                vec![
-                    (S::LinkClose, Some(Message::LinkDismiss), false),
-                    (S::LinkRetry, Some(Message::LinkAdd), true),
-                ],
-            ),
-            LinkPrompt::Invalid => (
-                S::LinkInvalidTitle,
-                t(S::LinkInvalidBody, locale).to_string(),
-                None,
-                vec![(S::LinkClose, Some(Message::LinkDismiss), true)],
-            ),
-        };
+    let (title, body, note, actions): (S, String, Option<S>, Vec<Action>) = match prompt {
+        LinkPrompt::Ask(link) => (
+            S::LinkTitle,
+            t(S::LinkBody, locale).to_string(),
+            replacement_note(app, link),
+            vec![
+                (S::Cancel, Some(Message::LinkDismiss), false),
+                (S::LinkAdd, Some(Message::LinkAdd), true),
+            ],
+        ),
+        // No buttons: the line says what is happening, and it ends on
+        // its own in a moment either way.
+        LinkPrompt::Adding(_) => (
+            S::LinkTitle,
+            t(S::LinkAdding, locale).to_string(),
+            None,
+            Vec::new(),
+        ),
+        LinkPrompt::Failed(_, issue) => (
+            S::LinkFailedTitle,
+            localization::issue(issue, locale),
+            None,
+            vec![
+                (S::LinkClose, Some(Message::LinkDismiss), false),
+                (S::LinkRetry, Some(Message::LinkAdd), true),
+            ],
+        ),
+        LinkPrompt::Invalid => (
+            S::LinkInvalidTitle,
+            t(S::LinkInvalidBody, locale).to_string(),
+            None,
+            vec![(S::LinkClose, Some(Message::LinkDismiss), true)],
+        ),
+    };
 
     // Every line fills the card and centres itself in it. Left to its own
     // width, the block hugged the card's left edge whenever its widest line was
     // shorter than the card — plain to see on "Загружаем подписку…".
-    let line = |content: iced::widget::Text<'a>| content.width(Length::Fill).align_x(Alignment::Center);
+    let line =
+        |content: iced::widget::Text<'a>| content.width(Length::Fill).align_x(Alignment::Center);
     let mut words = column![
         line(
             text(t(title, locale))
@@ -85,7 +85,9 @@ pub fn view<'a>(app: &'a Moonlight, prompt: &'a LinkPrompt) -> Element<'a, Messa
     }
 
     let has_actions = !actions.is_empty();
-    let mut buttons = row![hspace(Length::Fill)].spacing(10).align_y(Alignment::Center);
+    let mut buttons = row![hspace(Length::Fill)]
+        .spacing(10)
+        .align_y(Alignment::Center);
     for (label, message, primary) in actions {
         let label = text(t(label, locale))
             .size(14.5)
@@ -118,16 +120,16 @@ pub fn view<'a>(app: &'a Moonlight, prompt: &'a LinkPrompt) -> Element<'a, Messa
     }
 
     let card = container(content)
-    .width(Length::Fixed(460.0))
-    .style(move |_| container::Style {
-        background: Some(Background::Color(palette.surface)),
-        border: Border {
-            radius: iced::border::Radius::from(radii::PANEL),
-            width: 1.0,
-            color: palette.hairline,
-        },
-        ..Default::default()
-    });
+        .width(Length::Fixed(460.0))
+        .style(move |_| container::Style {
+            background: Some(Background::Color(palette.surface)),
+            border: Border {
+                radius: iced::border::Radius::from(radii::PANEL),
+                width: 1.0,
+                color: palette.hairline,
+            },
+            ..Default::default()
+        });
 
     // Opaque, so nothing under the question can be clicked while it is asked.
     opaque(

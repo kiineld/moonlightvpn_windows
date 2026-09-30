@@ -211,11 +211,13 @@ impl SubscriptionClient {
                     source: Source::ShareLinks,
                 })
             }
-            Err(error) => Err(if last_error == Failure::Empty || error.is_about_the_account() {
-                error
-            } else {
-                last_error
-            }),
+            Err(error) => Err(
+                if last_error == Failure::Empty || error.is_about_the_account() {
+                    error
+                } else {
+                    last_error
+                },
+            ),
         }
     }
 
@@ -368,9 +370,10 @@ pub fn info_from_headers(header: impl Fn(&str) -> Option<String>) -> Subscriptio
 
     info.title = header("profile-title").and_then(|raw| text(&raw));
     info.announce = header("announce").and_then(|raw| text(&raw));
-    info.web_page_url = header("profile-web-page-url").and_then(|raw| link(&raw, &["https", "http"]));
-    info.support_url = header("support-url")
-        .and_then(|raw| link(&raw, &["https", "http", "tg", "mailto"]));
+    info.web_page_url =
+        header("profile-web-page-url").and_then(|raw| link(&raw, &["https", "http"]));
+    info.support_url =
+        header("support-url").and_then(|raw| link(&raw, &["https", "http", "tg", "mailto"]));
     info.update_interval_hours = header("profile-update-interval")
         .and_then(|raw| raw.trim().parse::<u32>().ok())
         .filter(|hours| *hours > 0);
@@ -384,7 +387,9 @@ pub fn info_from_headers(header: impl Fn(&str) -> Option<String>) -> Subscriptio
 /// date in 2099 or 2100 rather than leaving the field out, in the `/info` JSON
 /// and in the header alike. Read literally, it was a plan with 26 892 days left.
 pub fn expiry(unix_seconds: i64) -> Option<i64> {
-    let year = OffsetDateTime::from_unix_timestamp(unix_seconds).ok()?.year();
+    let year = OffsetDateTime::from_unix_timestamp(unix_seconds)
+        .ok()?
+        .year();
     (year < 2099).then_some(unix_seconds)
 }
 
@@ -442,8 +447,14 @@ pub fn merging(base: &SubscriptionInfo, other: &SubscriptionInfo) -> Subscriptio
         device_limit: other.device_limit.or(base.device_limit),
         devices_used: other.devices_used.or(base.devices_used),
         announce: other.announce.clone().or_else(|| base.announce.clone()),
-        web_page_url: other.web_page_url.clone().or_else(|| base.web_page_url.clone()),
-        support_url: other.support_url.clone().or_else(|| base.support_url.clone()),
+        web_page_url: other
+            .web_page_url
+            .clone()
+            .or_else(|| base.web_page_url.clone()),
+        support_url: other
+            .support_url
+            .clone()
+            .or_else(|| base.support_url.clone()),
         update_interval_hours: other.update_interval_hours.or(base.update_interval_hours),
         refill_date: other.refill_date.or(base.refill_date),
     }
@@ -711,15 +722,24 @@ mod tests {
     #[test]
     fn every_remnawave_header_is_read() {
         let info = info_from_headers(headers(&[
-            ("announce", &format!("base64:{}", STANDARD.encode("Плановые работы в 3:00"))),
+            (
+                "announce",
+                &format!("base64:{}", STANDARD.encode("Плановые работы в 3:00")),
+            ),
             ("profile-web-page-url", "https://example.com/renew"),
             ("support-url", "tg://resolve?domain=support"),
             ("profile-update-interval", "12"),
             ("subscription-refill-date", "1893456000"),
         ]));
         assert_eq!(info.announce.as_deref(), Some("Плановые работы в 3:00"));
-        assert_eq!(info.web_page_url.as_deref(), Some("https://example.com/renew"));
-        assert_eq!(info.support_url.as_deref(), Some("tg://resolve?domain=support"));
+        assert_eq!(
+            info.web_page_url.as_deref(),
+            Some("https://example.com/renew")
+        );
+        assert_eq!(
+            info.support_url.as_deref(),
+            Some("tg://resolve?domain=support")
+        );
         assert_eq!(info.update_interval_hours, Some(12));
         assert_eq!(info.refill_date, Some(1_893_456_000));
     }
@@ -728,7 +748,10 @@ mod tests {
     fn base64_text_tolerates_the_url_safe_alphabet_and_missing_padding() {
         // "Привет?>" encodes with both '+' and '/' in the standard alphabet.
         let standard = STANDARD.encode("Привет?>");
-        let url_safe = standard.replace('+', "-").replace('/', "_").replace('=', "");
+        let url_safe = standard
+            .replace('+', "-")
+            .replace('/', "_")
+            .replace('=', "");
         let info = info_from_headers(headers(&[("announce", &format!("BASE64:{url_safe}"))]));
         assert_eq!(info.announce.as_deref(), Some("Привет?>"));
     }
@@ -736,7 +759,10 @@ mod tests {
     #[test]
     fn a_link_header_with_an_unexpected_scheme_is_dropped() {
         let info = info_from_headers(headers(&[
-            ("profile-web-page-url", "file:///C:/Windows/system32/calc.exe"),
+            (
+                "profile-web-page-url",
+                "file:///C:/Windows/system32/calc.exe",
+            ),
             ("support-url", "javascript:alert(1)"),
         ]));
         assert_eq!(info.web_page_url, None);
@@ -765,6 +791,9 @@ mod tests {
         );
         assert!(announced.is_about_the_account());
         assert_eq!(Issue::from(&Failure::Http(404)), Issue::LinkRejected);
-        assert_eq!(Issue::from(&Failure::Http(502)), Issue::ServerUnavailable(Some(502)));
+        assert_eq!(
+            Issue::from(&Failure::Http(502)),
+            Issue::ServerUnavailable(Some(502))
+        );
     }
 }

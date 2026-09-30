@@ -77,7 +77,9 @@ mod imp {
 
     impl Drop for Key {
         fn drop(&mut self) {
-            unsafe { let _ = RegCloseKey(self.0); }
+            unsafe {
+                let _ = RegCloseKey(self.0);
+            }
         }
     }
 
@@ -121,9 +123,8 @@ mod imp {
             return false;
         };
         let command = wide(&run_command(&executable));
-        let bytes = unsafe {
-            std::slice::from_raw_parts(command.as_ptr() as *const u8, command.len() * 2)
-        };
+        let bytes =
+            unsafe { std::slice::from_raw_parts(command.as_ptr() as *const u8, command.len() * 2) };
         let status =
             unsafe { RegSetValueExW(key.0, PCWSTR(name.as_ptr()), None, REG_SZ, Some(bytes)) };
         status == ERROR_SUCCESS

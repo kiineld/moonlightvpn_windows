@@ -249,7 +249,6 @@ impl Preferences {
         self.latencies.retain(|name, _| live_nodes.contains(name));
         self.unreachable.retain(|name| live_nodes.contains(name));
     }
-
 }
 
 #[cfg(test)]
@@ -314,7 +313,12 @@ mod tests {
     fn preferences_round_trip() {
         let mut prefs = Preferences {
             subscription_url: Some("https://panel/sub".into()),
-            routing_rules: vec![RoutingRule::new(Kind::Domain, "x.com", DIRECT, Priority::Extend)],
+            routing_rules: vec![RoutingRule::new(
+                Kind::Domain,
+                "x.com",
+                DIRECT,
+                Priority::Extend,
+            )],
             ..Default::default()
         };
         prefs.record_latency("Node A", Some(37));

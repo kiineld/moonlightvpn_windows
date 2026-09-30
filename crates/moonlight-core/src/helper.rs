@@ -212,8 +212,8 @@ mod client {
     pub fn stop() {
         use windows::core::HSTRING;
         use windows::Win32::System::Services::{
-            CloseServiceHandle, ControlService, OpenSCManagerW, OpenServiceW, SERVICE_CONTROL_STOP,
-            SERVICE_STATUS, SC_MANAGER_CONNECT, SERVICE_STOP,
+            CloseServiceHandle, ControlService, OpenSCManagerW, OpenServiceW, SC_MANAGER_CONNECT,
+            SERVICE_CONTROL_STOP, SERVICE_STATUS, SERVICE_STOP,
         };
 
         unsafe {
@@ -234,8 +234,8 @@ mod client {
     fn status() -> Option<u32> {
         use windows::core::HSTRING;
         use windows::Win32::System::Services::{
-            CloseServiceHandle, OpenSCManagerW, OpenServiceW, QueryServiceStatus, SERVICE_STATUS,
-            SC_MANAGER_CONNECT, SERVICE_QUERY_STATUS,
+            CloseServiceHandle, OpenSCManagerW, OpenServiceW, QueryServiceStatus,
+            SC_MANAGER_CONNECT, SERVICE_QUERY_STATUS, SERVICE_STATUS,
         };
 
         unsafe {

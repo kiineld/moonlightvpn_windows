@@ -413,14 +413,26 @@ mod tests {
     fn a_lerp_lands_exactly_on_its_endpoints() {
         // Anything else leaves the theme fractionally wrong once the fade ends,
         // for as long as the app stays open.
-        assert_eq!(Palette::lerp(&Palette::DARK, &Palette::LIGHT, 0.0), Palette::DARK);
-        assert_eq!(Palette::lerp(&Palette::DARK, &Palette::LIGHT, 1.0), Palette::LIGHT);
+        assert_eq!(
+            Palette::lerp(&Palette::DARK, &Palette::LIGHT, 0.0),
+            Palette::DARK
+        );
+        assert_eq!(
+            Palette::lerp(&Palette::DARK, &Palette::LIGHT, 1.0),
+            Palette::LIGHT
+        );
     }
 
     #[test]
     fn a_lerp_is_clamped_outside_the_unit_range() {
-        assert_eq!(Palette::lerp(&Palette::DARK, &Palette::LIGHT, -3.0), Palette::DARK);
-        assert_eq!(Palette::lerp(&Palette::DARK, &Palette::LIGHT, 9.0), Palette::LIGHT);
+        assert_eq!(
+            Palette::lerp(&Palette::DARK, &Palette::LIGHT, -3.0),
+            Palette::DARK
+        );
+        assert_eq!(
+            Palette::lerp(&Palette::DARK, &Palette::LIGHT, 9.0),
+            Palette::LIGHT
+        );
     }
 
     #[test]

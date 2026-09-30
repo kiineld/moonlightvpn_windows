@@ -73,7 +73,11 @@ fn header(app: &Moonlight) -> Element<'_, Message> {
     let pin = button(icon(
         Icon::Pin,
         16.0,
-        if pinned { palette.text } else { palette.text_muted },
+        if pinned {
+            palette.text
+        } else {
+            palette.text_muted
+        },
     ))
     .on_press(Message::TogglePin)
     .padding(8)
@@ -250,9 +254,11 @@ fn server_row<'a>(app: &'a Moonlight, node: &'a Node, chosen: bool) -> Element<'
     let palette = app.palette_of();
 
     let mut badges = row![].spacing(6).align_y(Alignment::Center);
-    if let Some(label) = node.protocol_label.clone().or_else(|| {
-        (!node.is_group && !node.kind.is_empty()).then(|| node.kind.to_uppercase())
-    }) {
+    if let Some(label) = node
+        .protocol_label
+        .clone()
+        .or_else(|| (!node.is_group && !node.kind.is_empty()).then(|| node.kind.to_uppercase()))
+    {
         badges = badges.push(badge(label.to_uppercase(), app));
     }
     if let Some(description) = node.description.clone() {

@@ -32,7 +32,11 @@ pub fn view(app: &Moonlight) -> Element<'_, Message> {
     let tab = app.rules_tab();
 
     let count = match tab {
-        RulesTab::Mine => format!("{}: {}", t(S::RulesOwnCount, locale), app.rules_draft().len()),
+        RulesTab::Mine => format!(
+            "{}: {}",
+            t(S::RulesOwnCount, locale),
+            app.rules_draft().len()
+        ),
         RulesTab::Subscription => format!(
             "{}: {}",
             t(S::RulesProfileCount, locale),
@@ -109,14 +113,25 @@ fn apply_bar(app: &Moonlight) -> Element<'_, Message> {
                 .size(13.5)
                 .color(palette.text2),
             hspace(Length::Fill),
-            button(text(t(S::RulesReset, locale)).size(13.5).font(moonlight_design::ui(EMPHATIC)))
-                .on_press_maybe((!applying).then_some(Message::RulesReset))
-                .padding([8, 16])
-                .style(move |_, status| theme::header_button(palette, status)),
             button(
-                text(t(if applying { S::RulesApplying } else { S::RulesApply }, locale))
+                text(t(S::RulesReset, locale))
                     .size(13.5)
                     .font(moonlight_design::ui(EMPHATIC))
+            )
+            .on_press_maybe((!applying).then_some(Message::RulesReset))
+            .padding([8, 16])
+            .style(move |_, status| theme::header_button(palette, status)),
+            button(
+                text(t(
+                    if applying {
+                        S::RulesApplying
+                    } else {
+                        S::RulesApply
+                    },
+                    locale
+                ))
+                .size(13.5)
+                .font(moonlight_design::ui(EMPHATIC))
             )
             .on_press_maybe((!applying).then_some(Message::RulesApply))
             .padding([8, 18])
@@ -174,7 +189,11 @@ fn kind_chip<'a>(label: String, app: &Moonlight, dim: bool) -> Element<'a, Messa
         text(label)
             .font(moonlight_design::mono())
             .size(12.5)
-            .color(if dim { palette.text_muted } else { palette.text }),
+            .color(if dim {
+                palette.text_muted
+            } else {
+                palette.text
+            }),
     )
     .padding([4, 8])
     .style(move |_| container::Style {
@@ -211,16 +230,23 @@ fn mine(app: &Moonlight) -> Element<'_, Message> {
     let can_drag = filter.trim().is_empty();
     let dragging = app.dragging_rule();
 
-    let mut list = column![header(app, HANDLE + 12.0 + 44.0), components::divider(palette)];
+    let mut list = column![
+        header(app, HANDLE + 12.0 + 44.0),
+        components::divider(palette)
+    ];
     for (index, rule) in rules.iter().enumerate() {
         if !matches(filter, [rule.kind.token(), &rule.value, &rule.target]) {
             continue;
         }
-        list = list.push(rule_row(app, rule, index, can_drag, dragging == Some(rule.id)));
+        list = list.push(rule_row(
+            app,
+            rule,
+            index,
+            can_drag,
+            dragging == Some(rule.id),
+        ));
     }
-    container(list)
-        .style(move |_| theme::panel(palette))
-        .into()
+    container(list).style(move |_| theme::panel(palette)).into()
 }
 
 fn rule_row<'a>(
@@ -233,7 +259,13 @@ fn rule_row<'a>(
     let palette = app.palette_of();
     let locale = app.locale_of();
     let dim = !rule.enabled;
-    let ink = |color: iced::Color| if dim { theme::alpha(color, 0.45) } else { color };
+    let ink = |color: iced::Color| {
+        if dim {
+            theme::alpha(color, 0.45)
+        } else {
+            color
+        }
+    };
 
     let grip = container(icon(Icon::GripVertical, 16.0, palette.text_muted))
         .width(Length::Fixed(HANDLE))
@@ -270,7 +302,8 @@ fn rule_row<'a>(
     let content = row![
         handle,
         components::toggle(rule.enabled, Message::RuleToggle(rule.id), palette),
-        container(kind_chip(rule.kind.token().to_string(), app, dim)).width(Length::Fixed(TYPE_WIDTH)),
+        container(kind_chip(rule.kind.token().to_string(), app, dim))
+            .width(Length::Fixed(TYPE_WIDTH)),
         text(rule.value.clone())
             .font(moonlight_design::mono())
             .size(13.5)

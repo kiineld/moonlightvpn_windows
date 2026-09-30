@@ -245,16 +245,16 @@ fn dial_column(app: &Moonlight) -> Element<'_, Message> {
     let problem = app.last_error().map(str::to_string).or_else(|| {
         app.refresh_note()
             .is_none()
-            .then(|| app.refresh_issue().map(|issue| localization::issue(issue, locale)))
+            .then(|| {
+                app.refresh_issue()
+                    .map(|issue| localization::issue(issue, locale))
+            })
             .flatten()
     });
     let hint: Element<'_, Message> = match problem {
         // A failure replaces the hint rather than sitting beside it: the hint
         // says "press to connect", which is exactly what has just not worked.
-        Some(error) => text(error)
-            .size(scale::META)
-            .color(palette.danger)
-            .into(),
+        Some(error) => text(error).size(scale::META).color(palette.danger).into(),
         None if app.preferences().subscription_url.is_none() => text(t(S::NoSubscription, locale))
             .size(scale::META)
             .color(palette.text_muted)
@@ -307,12 +307,12 @@ fn dial_column(app: &Moonlight) -> Element<'_, Message> {
     }
 
     container(stack)
-    // Centred in whatever height the panel has, which is what
-    // `justify-content:center` does in the composition — and unlike a pair of
-    // Fill spacers it still works when the height is unbounded.
-    .center_x(Length::Fill)
-    .center_y(Length::Fill)
-    .into()
+        // Centred in whatever height the panel has, which is what
+        // `justify-content:center` does in the composition — and unlike a pair of
+        // Fill spacers it still works when the height is unbounded.
+        .center_x(Length::Fill)
+        .center_y(Length::Fill)
+        .into()
 }
 
 /// The connect shortcut. The composition spells it per platform; this build is
@@ -352,7 +352,9 @@ fn stats(app: &Moonlight) -> Element<'_, Message> {
         format::bytes(Some(0), locale)
     } else {
         match info.total {
-            Some(total) => format::bytes(Some(total.saturating_sub(info.used().unwrap_or(0))), locale),
+            Some(total) => {
+                format::bytes(Some(total.saturating_sub(info.used().unwrap_or(0))), locale)
+            }
             None => t(S::Unlimited, locale).to_string(),
         }
     };
@@ -553,10 +555,7 @@ fn node_row<'a>(app: &'a Moonlight, node: &'a Node, selected: bool) -> Element<'
     } else {
         let (dot, label) = match node.latency {
             Some(ms) => (palette.ping_color(ms), format::latency(Some(ms), true)),
-            None => (
-                palette.text_muted,
-                format::latency(None, node.probed),
-            ),
+            None => (palette.text_muted, format::latency(None, node.probed)),
         };
         row![
             container(vspace(Length::Fixed(6.0)))

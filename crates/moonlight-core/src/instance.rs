@@ -109,13 +109,19 @@ mod tests {
     use super::request_from_args;
 
     fn args(list: &[&str]) -> impl Iterator<Item = String> {
-        list.iter().map(|s| s.to_string()).collect::<Vec<_>>().into_iter()
+        list.iter()
+            .map(|s| s.to_string())
+            .collect::<Vec<_>>()
+            .into_iter()
     }
 
     #[test]
     fn a_bare_launch_asks_for_the_window() {
         assert_eq!(request_from_args(args(&["moonlight.exe"])), "show");
-        assert_eq!(request_from_args(args(&["moonlight.exe", "--autostart"])), "show");
+        assert_eq!(
+            request_from_args(args(&["moonlight.exe", "--autostart"])),
+            "show"
+        );
     }
 
     #[test]

@@ -32,7 +32,12 @@ pub fn view(app: &Moonlight) -> Element<'_, Message> {
     ];
 
     let controls = row![
-        components::segmented(&sources, app.log_source(), Message::LogFilterSource, palette),
+        components::segmented(
+            &sources,
+            app.log_source(),
+            Message::LogFilterSource,
+            palette
+        ),
         hspace(Length::Fixed(12.0)),
         components::segmented(&levels, app.log_level(), Message::LogFilterLevel, palette),
         hspace(Length::Fixed(12.0)),

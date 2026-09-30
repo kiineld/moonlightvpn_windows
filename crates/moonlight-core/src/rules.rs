@@ -98,14 +98,19 @@ impl Kind {
 
     pub fn family(self) -> Family {
         match self {
-            Kind::Domain | Kind::DomainSuffix | Kind::DomainKeyword | Kind::DomainRegex | Kind::Geosite => {
-                Family::Domain
+            Kind::Domain
+            | Kind::DomainSuffix
+            | Kind::DomainKeyword
+            | Kind::DomainRegex
+            | Kind::Geosite => Family::Domain,
+            Kind::IpCidr | Kind::IpCidr6 | Kind::IpAsn | Kind::Geoip | Kind::SrcIpCidr => {
+                Family::Ip
             }
-            Kind::IpCidr | Kind::IpCidr6 | Kind::IpAsn | Kind::Geoip | Kind::SrcIpCidr => Family::Ip,
             Kind::DstPort | Kind::SrcPort => Family::Port,
-            Kind::ProcessName | Kind::ProcessNameRegex | Kind::ProcessPath | Kind::ProcessPathRegex => {
-                Family::Process
-            }
+            Kind::ProcessName
+            | Kind::ProcessNameRegex
+            | Kind::ProcessPath
+            | Kind::ProcessPathRegex => Family::Process,
             Kind::Network => Family::Other,
         }
     }
@@ -121,7 +126,10 @@ impl Kind {
     /// Address rules carry `no-resolve`, so a domain is not looked up just to
     /// be tested against an address — a DNS query per connection.
     fn wants_no_resolve(self) -> bool {
-        matches!(self, Kind::IpCidr | Kind::IpCidr6 | Kind::IpAsn | Kind::Geoip)
+        matches!(
+            self,
+            Kind::IpCidr | Kind::IpCidr6 | Kind::IpAsn | Kind::Geoip
+        )
     }
 
     /// The example shown in the empty field. Process examples are
@@ -184,7 +192,12 @@ pub struct RoutingRule {
 }
 
 impl RoutingRule {
-    pub fn new(kind: Kind, value: impl Into<String>, target: impl Into<String>, priority: Priority) -> Self {
+    pub fn new(
+        kind: Kind,
+        value: impl Into<String>,
+        target: impl Into<String>,
+        priority: Priority,
+    ) -> Self {
         RoutingRule {
             id: Uuid::new_v4(),
             kind,
@@ -197,8 +210,17 @@ impl RoutingRule {
 
     /// The rule as mihomo's rule grammar writes it.
     pub fn line(&self) -> String {
-        let suffix = if self.kind.wants_no_resolve() { ",no-resolve" } else { "" };
-        format!("{},{},{}{suffix}", self.kind.token(), self.value.trim(), self.target)
+        let suffix = if self.kind.wants_no_resolve() {
+            ",no-resolve"
+        } else {
+            ""
+        };
+        format!(
+            "{},{},{}{suffix}",
+            self.kind.token(),
+            self.value.trim(),
+            self.target
+        )
     }
 }
 
@@ -253,7 +275,9 @@ pub fn validate(kind: Kind, value: &str) -> Option<Invalid> {
     };
     match kind {
         Kind::ProcessNameRegex | Kind::ProcessPathRegex | Kind::DomainRegex => {
-            regex::Regex::new(value).err().map(|e| Invalid::BadRegex(e.to_string()))
+            regex::Regex::new(value)
+                .err()
+                .map(|e| Invalid::BadRegex(e.to_string()))
         }
         Kind::DstPort | Kind::SrcPort if !ports(value) => Some(Invalid::BadPort),
         Kind::IpCidr | Kind::SrcIpCidr if !is_cidr(value, false) => Some(Invalid::BadCidr),
@@ -307,13 +331,22 @@ pub fn place(
                 && (processes || !r.kind.needs_process_matching())
         })
         .collect();
-    let lines = |priority| usable.iter().filter(move |r| r.priority == priority).map(|r| r.line());
+    let lines = |priority| {
+        usable
+            .iter()
+            .filter(move |r| r.priority == priority)
+            .map(|r| r.line())
+    };
 
     let mut out: Vec<String> = lines(Priority::Override).collect();
     let catch_all = rules
         .last()
         .filter(|last| last.trim().to_uppercase().starts_with("MATCH,"));
-    let body = if catch_all.is_some() { &rules[..rules.len() - 1] } else { rules };
+    let body = if catch_all.is_some() {
+        &rules[..rules.len() - 1]
+    } else {
+        rules
+    };
     out.extend_from_slice(body);
     out.extend(lines(Priority::Extend));
     out.extend(catch_all.cloned());
@@ -408,7 +441,12 @@ pub fn carried_over(rules: &[SplitRule], mode: SplitMode, group: &str) -> Vec<Ro
             id: r.id,
             kind: r.kind,
             value: r.value.trim().to_string(),
-            target: if mode == SplitMode::Only { group } else { DIRECT }.to_string(),
+            target: if mode == SplitMode::Only {
+                group
+            } else {
+                DIRECT
+            }
+            .to_string(),
             priority: Priority::Override,
             enabled: r.enabled && mode != SplitMode::All,
         })
@@ -434,7 +472,10 @@ mod tests {
     fn address_rules_carry_no_resolve_and_nothing_else_does() {
         for kind in Kind::ALL {
             let line = rule(*kind, kind.placeholder(), DIRECT, Priority::Override).line();
-            let expected = matches!(kind, Kind::IpCidr | Kind::IpCidr6 | Kind::IpAsn | Kind::Geoip);
+            let expected = matches!(
+                kind,
+                Kind::IpCidr | Kind::IpCidr6 | Kind::IpAsn | Kind::Geoip
+            );
             assert_eq!(line.ends_with(",no-resolve"), expected, "{line}");
         }
     }
@@ -454,7 +495,11 @@ mod tests {
     fn empty_values_and_commas_are_refused_in_every_kind() {
         for kind in Kind::ALL {
             assert_eq!(validate(*kind, "  "), Some(Invalid::Empty), "{kind}");
-            assert_eq!(validate(*kind, "a,b"), Some(Invalid::ContainsComma), "{kind}");
+            assert_eq!(
+                validate(*kind, "a,b"),
+                Some(Invalid::ContainsComma),
+                "{kind}"
+            );
         }
     }
 
@@ -469,8 +514,14 @@ mod tests {
     #[test]
     fn regex_kinds_compile_their_pattern() {
         assert_eq!(validate(Kind::DomainRegex, r"^.*\.example\.com$"), None);
-        assert!(matches!(validate(Kind::DomainRegex, "([unclosed"), Some(Invalid::BadRegex(_))));
-        assert!(matches!(validate(Kind::ProcessNameRegex, "*bad"), Some(Invalid::BadRegex(_))));
+        assert!(matches!(
+            validate(Kind::DomainRegex, "([unclosed"),
+            Some(Invalid::BadRegex(_))
+        ));
+        assert!(matches!(
+            validate(Kind::ProcessNameRegex, "*bad"),
+            Some(Invalid::BadRegex(_))
+        ));
     }
 
     #[test]
@@ -480,7 +531,11 @@ mod tests {
             assert_eq!(validate(Kind::SrcPort, good), None, "{good}");
         }
         for bad in ["0", "65536", "http", "-1", "2000-1000", "80/", "1-2-3"] {
-            assert_eq!(validate(Kind::DstPort, bad), Some(Invalid::BadPort), "{bad}");
+            assert_eq!(
+                validate(Kind::DstPort, bad),
+                Some(Invalid::BadPort),
+                "{bad}"
+            );
         }
     }
 
@@ -489,12 +544,24 @@ mod tests {
         assert_eq!(validate(Kind::IpCidr, "192.168.1.0/24"), None);
         assert_eq!(validate(Kind::IpCidr, "2001:db8::/64"), None);
         assert_eq!(validate(Kind::SrcIpCidr, "10.0.0.0/8"), None);
-        assert_eq!(validate(Kind::IpCidr, "999.1.1.1/24"), Some(Invalid::BadCidr));
-        assert_eq!(validate(Kind::IpCidr, "10.0.0.0/64"), Some(Invalid::BadCidr));
-        assert_eq!(validate(Kind::IpCidr, "192.168.1.0"), Some(Invalid::BadCidr));
+        assert_eq!(
+            validate(Kind::IpCidr, "999.1.1.1/24"),
+            Some(Invalid::BadCidr)
+        );
+        assert_eq!(
+            validate(Kind::IpCidr, "10.0.0.0/64"),
+            Some(Invalid::BadCidr)
+        );
+        assert_eq!(
+            validate(Kind::IpCidr, "192.168.1.0"),
+            Some(Invalid::BadCidr)
+        );
         // IP-CIDR6 is for v6 addresses only.
         assert_eq!(validate(Kind::IpCidr6, "2001:db8::/32"), None);
-        assert_eq!(validate(Kind::IpCidr6, "10.0.0.0/8"), Some(Invalid::BadCidr));
+        assert_eq!(
+            validate(Kind::IpCidr6, "10.0.0.0/8"),
+            Some(Invalid::BadCidr)
+        );
     }
 
     #[test]
@@ -507,7 +574,10 @@ mod tests {
     }
 
     fn targets() -> HashSet<String> {
-        [DIRECT, REJECT, "Proxy"].into_iter().map(String::from).collect()
+        [DIRECT, REJECT, "Proxy"]
+            .into_iter()
+            .map(String::from)
+            .collect()
     }
 
     #[test]
@@ -563,10 +633,16 @@ mod tests {
         assert_eq!(logical.target, "Proxy");
 
         let resolve = ProfileRule::parse("IP-CIDR,10.0.0.0/8,DIRECT,no-resolve");
-        assert_eq!((resolve.value.as_str(), resolve.target.as_str()), ("10.0.0.0/8", "DIRECT"));
+        assert_eq!(
+            (resolve.value.as_str(), resolve.target.as_str()),
+            ("10.0.0.0/8", "DIRECT")
+        );
 
         let catch_all = ProfileRule::parse("MATCH,Proxy");
-        assert_eq!((catch_all.kind.as_str(), catch_all.value.as_str()), ("MATCH", ""));
+        assert_eq!(
+            (catch_all.kind.as_str(), catch_all.value.as_str()),
+            ("MATCH", "")
+        );
         assert_eq!(catch_all.target, "Proxy");
     }
 
@@ -580,7 +656,10 @@ mod tests {
             app_executable: Some("Telegram.exe".into()),
         }];
         let except = carried_over(&old, SplitMode::Except, "Proxy");
-        assert_eq!((except[0].target.as_str(), except[0].enabled), (DIRECT, true));
+        assert_eq!(
+            (except[0].target.as_str(), except[0].enabled),
+            (DIRECT, true)
+        );
         let only = carried_over(&old, SplitMode::Only, "Proxy");
         assert_eq!((only[0].target.as_str(), only[0].enabled), ("Proxy", true));
         let all = carried_over(&old, SplitMode::All, "Proxy");
