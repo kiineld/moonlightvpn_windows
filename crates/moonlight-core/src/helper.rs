@@ -40,7 +40,9 @@ use serde::{Deserialize, Serialize};
 
 /// The service's registered name, and the pipe it listens on.
 pub const SERVICE_NAME: &str = "MoonlightHelper";
-pub const SERVICE_DISPLAY_NAME: &str = "Moonlight VPN Helper";
+/// What Services lists. The name above is an identifier and never changes;
+/// this is the brand, and is written as the brand is.
+pub const SERVICE_DISPLAY_NAME: &str = "moonlight helper";
 pub const PIPE_NAME: &str = r"\\.\pipe\moonlight-helper";
 
 /// Where the service keeps the things only it may write: its own copy of the
@@ -294,7 +296,7 @@ mod client {
                     let worth_waiting =
                         error.raw_os_error() == Some(ERROR_PIPE_BUSY) || is_running();
                     if !worth_waiting || std::time::Instant::now() >= deadline {
-                        return Err(format!("The Moonlight helper is not running: {error}"));
+                        return Err(format!("The moonlight helper is not running: {error}"));
                     }
                     std::thread::sleep(Duration::from_millis(100));
                 }

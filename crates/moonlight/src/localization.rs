@@ -146,7 +146,7 @@ strings! {
     ThemeLight      => "Светлое"            / "Light",
     Language        => "Язык"               / "Language",
     LaunchAtLogin   => "Запускать при входе в систему" / "Launch at sign-in",
-    LaunchAtLoginNote => "Moonlight запустится вместе с Windows" / "Moonlight starts with Windows",
+    LaunchAtLoginNote => "moonlight запустится вместе с Windows" / "moonlight starts with Windows",
     AutoUpdate      => "Автообновление подписки" / "Update the subscription automatically",
     AutoUpdateSub   => "Как часто проверять серверы, дни и трафик" / "How often to check servers, days and traffic",
     AutostartFailed => "Не удалось изменить автозапуск" / "Could not change the startup setting",

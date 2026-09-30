@@ -341,7 +341,7 @@ impl Controller {
     /// carrying traffic while the window says "Отключено". So the sweep comes
     /// first, before anything is started or read.
     async fn start(&mut self) {
-        self.narrate("INFO", "Moonlight starting");
+        self.narrate("INFO", "moonlight starting");
 
         // 1. Stop any privileged core this session did not ask for.
         if helper::is_installed() {

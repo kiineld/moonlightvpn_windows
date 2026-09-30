@@ -153,6 +153,9 @@ jobs:
             Moonlight.exe
             Moonlight-Helper.exe
             SHA256SUMS.txt
+          # The brand in lower case, as everywhere it is seen; the asset
+          # names above stay, because older updaters look for exactly those.
+          name: moonlight ${{ github.ref_name }}
           generate_release_notes: true
           body: |
             Unsigned, so SmartScreen will warn on first run: **More info →

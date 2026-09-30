@@ -16,8 +16,10 @@
   #define AppVersion "0.0.0"
 #endif
 
-#define AppName "Moonlight"
-#define AppPublisher "Moonlight"
+; The brand as users see it — Setup's title, the Start menu, Apps & features.
+; Asset and folder names stay as they are: older updaters look for them.
+#define AppName "moonlight"
+#define AppPublisher "moonlight"
 #define AppURL "https://github.com/kiineld/moonlightvpn_windows"
 #define AppExe "moonlight.exe"
 #define HelperExe "moonlight-helper.exe"

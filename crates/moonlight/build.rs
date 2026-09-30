@@ -17,9 +17,11 @@ fn main() {
 
         let mut resource = winresource::WindowsResource::new();
         resource.set_icon("assets/moonlight.ico");
-        resource.set("FileDescription", "Moonlight VPN");
-        resource.set("ProductName", "Moonlight");
-        resource.set("CompanyName", "Moonlight");
+        // What Task Manager and the file's properties show — the brand, in
+        // lower case as everywhere else it is seen.
+        resource.set("FileDescription", "moonlight");
+        resource.set("ProductName", "moonlight");
+        resource.set("CompanyName", "moonlight");
         resource.set("LegalCopyright", "MIT licensed");
 
         // A missing resource compiler must not fail the build: the binary is

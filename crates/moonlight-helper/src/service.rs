@@ -173,7 +173,7 @@ pub fn install() -> Result<(), Box<dyn std::error::Error>> {
     };
 
     service.set_description(
-        "Runs the Moonlight VPN core in TUN mode. Removing this service disables \
+        "Runs the moonlight core in TUN mode. Removing this service disables \
          TUN mode; system-proxy mode keeps working without it.",
     )?;
     grant_user_control()?;

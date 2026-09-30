@@ -33,7 +33,8 @@ use moonlight_design::{Appearance, Palette};
 
 use localization::{t, S};
 
-pub const APP_NAME: &str = "Moonlight";
+/// The brand, as everything a user sees writes it: lower case.
+pub const APP_NAME: &str = "moonlight";
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 /// Where *Проверить обновления* and the support links point.
