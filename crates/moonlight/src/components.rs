@@ -194,48 +194,18 @@ pub fn action_row<'a, M: Clone + 'a>(
 /// in a box and this design's is a switch — and because the whole row should be
 /// the target, not a 20pt square at the end of it.
 pub fn toggle<'a, M: Clone + 'a>(on: bool, message: M, palette: Palette) -> Element<'a, M> {
-    let track_fill = if on { palette.accent } else { palette.surface3 };
-    // The knob is the ink that sits on the accent when on, and the type colour
-    // on the empty track: with white as the accent, a white knob vanished into
-    // a switched-on track.
-    let knob_fill = if on {
-        palette.text_on_accent
-    } else {
-        palette.text
-    };
-    let knob = container(Space::new().width(Length::Fixed(TOGGLE_KNOB)))
-        .height(Length::Fixed(TOGGLE_KNOB))
-        .style(move |_| container::Style {
-            background: Some(Background::Color(knob_fill)),
-            border: Border {
-                radius: iced::border::Radius::from(radii::PILL),
-                ..Default::default()
-            },
-            ..Default::default()
-        });
-
-    let inner = if on {
-        row![Space::new().width(Length::Fill), knob]
-    } else {
-        row![knob, Space::new().width(Length::Fill)]
-    };
-
-    button(
-        container(inner.align_y(Alignment::Center))
-            // 44×26 with a 20px knob and 3px inset — the geometry the source
-            // animates, where the knob's travel is exactly its `translateX(18px)`.
-            .width(Length::Fixed(TOGGLE_W))
-            .height(Length::Fixed(TOGGLE_H))
-            .padding(TOGGLE_INSET)
-            .style(move |_| container::Style {
-                background: Some(Background::Color(track_fill)),
-                border: Border {
-                    radius: iced::border::Radius::from(radii::PILL),
-                    ..Default::default()
-                },
-                ..Default::default()
-            }),
-    )
+    // 44×26 with a 20px knob and 3px inset — the geometry the source animates,
+    // where the knob's travel is exactly its `translateX(18px)`. Off, the track
+    // is a translucent ink rather than a surface, as on macOS; the knob is the
+    // opposite of its track, so a white knob never sits on a white track.
+    button(crate::glide::Switch {
+        on,
+        size: iced::Size::new(TOGGLE_W, TOGGLE_H),
+        inset: TOGGLE_INSET,
+        knob: TOGGLE_KNOB,
+        track: (theme::alpha(palette.text, 0.12), palette.accent),
+        ink: (palette.text, palette.text_on_accent),
+    })
     .on_press(message)
     .padding(0)
     .style(|_, _| button::Style {
@@ -313,58 +283,64 @@ fn track<'a, T: Copy + PartialEq + 'a, M: Clone + 'a>(
     size: f32,
     pad_x: f32,
 ) -> Element<'a, M> {
-    let mut segments = row![].spacing(3);
-    for (value, label) in options {
-        let is_selected = *value == selected;
-        // Unselected labels take `text-muted`, not `text-2`: the track already
-        // sits on a lighter surface, and text-2 there reads as a second
-        // selection.
-        let ink = if is_selected {
-            palette.text_on_accent
-        } else {
-            palette.text_muted
-        };
-        segments = segments.push(
-            button(
-                container(
-                    text(*label)
-                        .size(size)
-                        .font(moonlight_design::ui(EMPHATIC))
-                        .color(ink),
-                )
-                .center_y(Length::Fixed(height)),
+    // One label per option, built twice: once in the resting colour, which is
+    // what is clicked, and once in the ink that sits on the capsule, which is
+    // drawn clipped to the capsule as it glides.
+    let segment = |label: &'a str, ink: Color, message: Option<M>| {
+        let mut segment = button(
+            container(
+                text(label)
+                    .size(size)
+                    .font(moonlight_design::ui(EMPHATIC))
+                    .color(ink),
             )
-            .on_press(on_select(*value))
-            .padding([0.0, pad_x])
-            .style(move |_, status| {
-                if is_selected {
-                    theme::accent_button(palette, status)
-                } else {
-                    button::Style {
-                        background: None,
-                        text_color: ink,
-                        border: Border {
-                            radius: iced::border::Radius::from(radii::PILL),
-                            ..Default::default()
-                        },
-                        ..Default::default()
-                    }
-                }
-            }),
-        );
-    }
-
-    container(segments)
-        .padding(3)
-        .style(move |_| container::Style {
-            background: Some(Background::Color(palette.surface2)),
+            .center_y(Length::Fixed(height)),
+        )
+        .padding([0.0, pad_x])
+        .style(move |_, _| button::Style {
+            background: None,
+            text_color: ink,
             border: Border {
                 radius: iced::border::Radius::from(radii::PILL),
                 ..Default::default()
             },
             ..Default::default()
-        })
-        .into()
+        });
+        if let Some(message) = message {
+            segment = segment.on_press(message);
+        }
+        segment
+    };
+
+    // Unselected labels take `text-muted`, not `text-2`: the track already sits
+    // on a lighter surface, and text-2 there reads as a second selection.
+    let mut resting = row![].spacing(3);
+    let mut lit = row![].spacing(3);
+    let mut chosen = usize::MAX;
+    for (index, (value, label)) in options.iter().enumerate() {
+        if *value == selected {
+            chosen = index;
+        }
+        resting = resting.push(segment(label, palette.text_muted, Some(on_select(*value))));
+        lit = lit.push(segment(label, palette.text_on_accent, None));
+    }
+
+    container(crate::glide::Sliding::new(
+        resting,
+        lit,
+        chosen,
+        palette.accent,
+    ))
+    .padding(3)
+    .style(move |_| container::Style {
+        background: Some(Background::Color(palette.surface2)),
+        border: Border {
+            radius: iced::border::Radius::from(radii::PILL),
+            ..Default::default()
+        },
+        ..Default::default()
+    })
+    .into()
 }
 
 /// A quota bar. A partial fill is the point here, which is exactly why the
@@ -525,9 +501,12 @@ pub fn empty_state_full<'a, M: Clone + 'a>(
         );
     }
 
+    // As tall as it is, not as tall as it is given: filling the height made
+    // it a fill item wherever it went, and on the connect page, centred by
+    // weighted spacers, that squeezed the whole block under the moon — state,
+    // mode and the way to add a subscription — down to nothing.
     container(stack)
         .center_x(Length::Fill)
-        .center_y(Length::Fill)
         .padding([28, 12])
         .into()
 }

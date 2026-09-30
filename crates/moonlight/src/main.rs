@@ -7,6 +7,7 @@
 #![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
 
 mod components;
+mod glide;
 mod localization;
 mod logo;
 mod moon;
@@ -28,7 +29,7 @@ use moonlight_core::subscription::Source;
 use moonlight_core::{
     AppEntry, AppLocale, ConnectionState, Issue, Node, SubscriptionInfo, TunnelMode,
 };
-use moonlight_design::motion::{self, dur, spring, Curve};
+use moonlight_design::motion::spring;
 use moonlight_design::{Appearance, Palette};
 
 use localization::{t, S};
@@ -758,8 +759,10 @@ impl Moonlight {
         let Some(previous) = self.previous_palette else {
             return target;
         };
-        let linear = motion::progress(started.elapsed(), dur::PAINT);
-        Palette::lerp(&previous, &target, Curve::EASE.at(linear))
+        // On the one spring, as the macOS client changes theme: 200 ms of ease
+        // was over before the eye had registered that it had started.
+        let t = spring::at(started.elapsed().as_secs_f32(), spring::STANDARD);
+        Palette::lerp(&previous, &target, t)
     }
 
     /// The theme as chosen: dark, light, or whatever Windows uses.
@@ -864,7 +867,7 @@ impl Moonlight {
         running(self.page_started, spring::SETTLE)
             || running(self.sidebar_started, spring::SETTLE)
             || running(self.rail_moved.map(|(_, _, at)| at), spring::SETTLE)
-            || running(self.theme_started, dur::PAINT)
+            || running(self.theme_started, spring::SETTLE)
             || self.drawer.moving()
             || self.phase.moving()
     }
@@ -912,11 +915,11 @@ impl Moonlight {
             }
             Message::SetLocale(locale) => {
                 if self.preferences.locale != locale {
+                    // The words change where they are, and the language switch's
+                    // capsule glides to its new side. Replaying the page's
+                    // entrance here dropped the whole screen and lifted it back
+                    // up, which read as the window jumping.
                     self.preferences.locale = locale;
-                    // Every string on screen has just been replaced, so the
-                    // screen replays its entrance rather than swapping the words
-                    // underneath the reader.
-                    self.page_started = Some(Instant::now());
                     self.save();
                 }
             }
@@ -1007,8 +1010,17 @@ impl Moonlight {
                 }
             }
             Message::RemoveSubscription => {
+                // Cleared here as well as by the controller, so nothing saved
+                // from the window before its report arrives writes the old link
+                // back. The page stays, as on macOS: it turns into the way to
+                // add one, which is what says the removal happened. Jumping to
+                // the connect page instead left the screen that was pressed
+                // and showed nothing that had changed.
+                self.preferences.subscription_url = None;
+                self.refresh_issue = None;
+                self.last_error = None;
+                self.drawer.go(0.0);
                 send(Command::RemoveSubscription);
-                self.page = Page::Connect;
             }
 
             Message::SetMode(mode) => {
@@ -1736,12 +1748,17 @@ impl Moonlight {
         });
         self.tray_window = Some(id);
         self.tray_backdrop = false;
-        Task::batch([
-            opened
-                .then(move |_| iced::window::run(id, native_handle))
-                .map(move |hwnd| Message::WindowHandle(id, hwnd)),
-            iced::window::gain_focus(id),
-        ])
+        // Focus, like the handle, is asked for once the window exists: asked
+        // for alongside the open it could arrive first and be dropped, and a
+        // panel that never had focus never loses it — so a click elsewhere,
+        // which is how it is put away, did nothing.
+        opened.then(move |_| {
+            Task::batch([
+                iced::window::gain_focus(id),
+                iced::window::run(id, native_handle)
+                    .map(move |hwnd| Message::WindowHandle(id, hwnd)),
+            ])
+        })
     }
 
     fn window_event(&mut self, id: iced::window::Id, event: iced::window::Event) -> Task<Message> {
@@ -2850,6 +2867,16 @@ mod tests {
         assert!(bottom < 4.0);
         app.rail_moved = Some((0.0, 0.0, Instant::now() - Duration::from_secs(2)));
         assert_eq!(app.selection(), (4.0, 4.0));
+    }
+
+    #[test]
+    fn removing_the_subscription_shows_at_once_on_the_page_it_was_removed_from() {
+        let mut app = app();
+        app.preferences.subscription_url = Some("https://example.com/sub".into());
+        app.go_to(Page::Subscription);
+        let _ = app.update(Message::RemoveSubscription);
+        assert!(app.preferences.subscription_url.is_none());
+        assert_eq!(app.page, Page::Subscription);
     }
 
     #[test]
