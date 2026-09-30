@@ -45,6 +45,10 @@ strings! {
     Disconnect      => "Отключить"          / "Disconnect",
     Connecting      => "Подключение…"       / "Connecting…",
     Disconnecting   => "Отключение…"        / "Disconnecting…",
+    // Under the moon: the state as a word, not in capitals.
+    Disconnected    => "Отключено"          / "Disconnected",
+    ConnectionTime  => "Время подключения"  / "Connection time",
+    ModeProxyShort  => "Прокси"             / "Proxy",
     // "Защищено", not "Подключено": the dial reports what you have rather than
     // what happened, which is the composition's wording.
     StateSecure     => "Защищено"           / "Secure",

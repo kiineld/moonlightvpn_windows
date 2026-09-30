@@ -8,7 +8,7 @@
 
 use iced::border::Radius;
 use iced::widget::{button, container, overlay, pick_list, scrollable, text_input};
-use iced::{Background, Border, Color, Shadow, Theme, Vector};
+use iced::{Background, Border, Color, Shadow, Theme};
 
 use moonlight_design::motion::{border, radii};
 use moonlight_design::Palette;
@@ -318,31 +318,6 @@ pub fn scroller(palette: Palette, _theme: &Theme) -> scrollable::Style {
             shadow: Shadow::default(),
             icon: palette.text2,
         },
-    }
-}
-
-/// A translucent shadow used under the connect dial when it is live.
-// Unused until the connected dial is wired up.
-#[allow(dead_code)]
-pub fn glow(color: Color) -> Shadow {
-    Shadow {
-        color: alpha(color, 0.35),
-        offset: Vector::ZERO,
-        blur_radius: 40.0,
-    }
-}
-
-/// The one glow in the system, reserved for the status dot and other tiny accent
-/// marks. Never for a panel: this is a flat system, where
-/// elevation is a surface's value rather than a blur.
-pub fn glow_sm(color: Color) -> Shadow {
-    Shadow {
-        color: alpha(color, 0.7),
-        offset: Vector::ZERO,
-        // 8, not 34. The macOS client sets this dot's shadow at radius 5, and
-        // 34 spread the 8px dot into a soft green disc a third the width of the
-        // ring — a blob, not a glow.
-        blur_radius: 8.0,
     }
 }
 

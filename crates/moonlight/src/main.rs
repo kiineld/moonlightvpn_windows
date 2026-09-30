@@ -7,9 +7,9 @@
 #![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
 
 mod components;
-mod dial;
 mod localization;
 mod logo;
+mod moon;
 mod screens;
 mod theme;
 
@@ -431,15 +431,26 @@ pub enum Message {
 
     /// From the controller.
     Controller(Event),
-    /// One animation frame; drives the dial's sweep.
+    /// One animation frame.
     Tick(Instant),
+    /// Open or close the server list under the picker.
+    ToggleServers,
+    /// Proxy or TUN, from the switch beside the state. TUN without the helper
+    /// goes to Settings to install it instead.
+    ChooseMode(TunnelMode),
 }
 
 pub struct Moonlight {
     page: Page,
     preferences: Preferences,
     state: ConnectionState,
-    transition_started: Option<Instant>,
+    /// The server list: 0 closed, 1 open.
+    drawer: Glide,
+    /// The moon: 0 a crescent, 1 full.
+    phase: Glide,
+    /// TUN was asked for without the helper: Settings puts the install first,
+    /// and TUN goes on once it is done.
+    tun_awaiting_helper: bool,
 
     nodes: Vec<Node>,
     info: SubscriptionInfo,
@@ -635,7 +646,9 @@ impl Moonlight {
             page: Page::Connect,
             preferences,
             state: ConnectionState::Disconnected,
-            transition_started: None,
+            drawer: Glide::at_rest(0.0),
+            phase: Glide::at_rest(0.0),
+            tun_awaiting_helper: false,
             nodes: Vec::new(),
             info: SubscriptionInfo::default(),
             source: None,
@@ -811,13 +824,8 @@ impl Moonlight {
         running(self.page_started, dur::ENTER)
             || running(self.sidebar_started, dur::SLIDE)
             || running(self.theme_started, dur::PAINT)
-    }
-
-    fn transition_progress(&self) -> f32 {
-        let Some(started) = self.transition_started else {
-            return 1.0;
-        };
-        moonlight_design::motion::progress(started.elapsed(), moonlight_design::dur::SLIDE)
+            || self.drawer.moving()
+            || self.phase.moving()
     }
 
     fn update(&mut self, message: Message) -> Task<Message> {
@@ -890,7 +898,6 @@ impl Moonlight {
                     return Task::none();
                 }
                 self.last_error = None;
-                self.transition_started = Some(Instant::now());
                 send(if self.state.is_connected() {
                     Command::Disconnect
                 } else {
@@ -904,6 +911,8 @@ impl Moonlight {
                     Some(name.clone())
                 };
                 self.preferences.auto_select = name.is_empty();
+                // Picking is what the list was opened for.
+                self.drawer.go(0.0);
                 send(Command::SelectNode(name));
             }
             Message::Ping => send(Command::Ping),
@@ -1174,6 +1183,10 @@ impl Moonlight {
                     self.save();
                     send(Command::SetMode(TunnelMode::SystemProxy));
                 }
+                // The install was for TUN, so TUN is what it ends in.
+                if installed && std::mem::take(&mut self.tun_awaiting_helper) {
+                    return self.update(Message::SetMode(TunnelMode::Tun));
+                }
             }
             Message::CheckForUpdates => {
                 if self.update.is_busy() {
@@ -1417,10 +1430,20 @@ impl Moonlight {
             }
 
             Message::Controller(event) => return self.apply(event),
-            Message::Tick(_) => {
-                if self.transition_progress() >= 1.0 {
-                    self.transition_started = None;
+            Message::ToggleServers => {
+                self.drawer.go(if self.drawer.to > 0.5 { 0.0 } else { 1.0 });
+            }
+            Message::ChooseMode(mode) => {
+                if mode == self.preferences.mode || self.state.is_busy() {
+                    return Task::none();
                 }
+                if mode == TunnelMode::Tun && !self.helper_installed {
+                    self.tun_awaiting_helper = true;
+                    return self.update(Message::Navigate(Page::Settings));
+                }
+                return self.update(Message::SetMode(mode));
+            }
+            Message::Tick(_) => {
                 if self.page == Page::Connections {
                     send(Command::RefreshConnections);
                 }
@@ -1433,12 +1456,7 @@ impl Moonlight {
     fn apply(&mut self, event: Event) -> Task<Message> {
         match event {
             Event::State(state) => {
-                // The transition ends when the controller says so, not when a
-                // timer runs out — a connect that takes eight seconds must not
-                // show a settled dial after four.
-                if !state.is_busy() {
-                    self.transition_started = None;
-                }
+                self.phase.go(if state.is_connected() { 1.0 } else { 0.0 });
                 if let ConnectionState::Failed(issue) = &state {
                     self.last_error = Some(localization::issue(issue, self.locale()));
                 }
@@ -1996,6 +2014,48 @@ fn native_handle(window: &dyn iced::window::Window) -> isize {
     }
 }
 
+/// A value on its way from where it was to where it is going — the drawer's
+/// openness, the moon's phase. Asking it to go somewhere new mid-way starts
+/// from where it is, not from where it was headed, so nothing jumps.
+#[derive(Debug, Clone, Copy)]
+struct Glide {
+    from: f32,
+    to: f32,
+    started: Option<Instant>,
+}
+
+impl Glide {
+    const fn at_rest(value: f32) -> Self {
+        Glide {
+            from: value,
+            to: value,
+            started: None,
+        }
+    }
+
+    fn value(&self) -> f32 {
+        let Some(started) = self.started else {
+            return self.to;
+        };
+        let t = Curve::EASE.at(motion::progress(started.elapsed(), dur::SLIDE));
+        self.from + (self.to - self.from) * t
+    }
+
+    fn moving(&self) -> bool {
+        self.started.is_some_and(|at| at.elapsed() < dur::SLIDE)
+    }
+
+    fn go(&mut self, to: f32) {
+        if to != self.to {
+            *self = Glide {
+                from: self.value(),
+                to,
+                started: Some(Instant::now()),
+            };
+        }
+    }
+}
+
 /// Tray clicks and second launches, taken once.
 type Outside = Mutex<Option<tokio::sync::mpsc::UnboundedReceiver<Message>>>;
 static OUTSIDE: OnceLock<Outside> = OnceLock::new();
@@ -2536,18 +2596,28 @@ impl Moonlight {
     pub fn palette_of(&self) -> Palette {
         self.palette()
     }
-    pub fn progress(&self) -> f32 {
-        self.transition_progress()
+    /// How far open the server list is, 0…1.
+    pub fn drawer(&self) -> f32 {
+        self.drawer.value()
     }
-
-    /// 0…1 through the halo's breath cycle.
-    ///
-    /// Keyed off wall time rather than a counter, so the phase does not jump
-    /// when the tick cadence changes between one-per-second and one-per-frame.
-    pub fn breath(&self) -> f32 {
-        const CYCLE: f32 = 4.2;
-        let elapsed = self.started.elapsed().as_secs_f32();
-        (elapsed % CYCLE) / CYCLE
+    pub fn servers_open(&self) -> bool {
+        self.drawer.to > 0.5
+    }
+    /// The moon's phase, 0 a crescent to 1 full.
+    pub fn moon_phase(&self) -> f32 {
+        self.phase.value()
+    }
+    /// Where the orbit round the moon is, 0…1, while the tunnel is changing
+    /// state. Keyed off wall time, so it turns at the same speed whatever the
+    /// tick cadence.
+    pub fn orbit(&self) -> Option<f32> {
+        const TURN: f32 = 1.4;
+        self.state
+            .is_busy()
+            .then(|| (self.started.elapsed().as_secs_f32() % TURN) / TURN)
+    }
+    pub fn tun_awaiting_helper(&self) -> bool {
+        self.tun_awaiting_helper
     }
 
     /// What Auto actually settled on — "Helsinki · 37 ms".
@@ -2687,20 +2757,39 @@ mod tests {
     fn pressing_connect_while_busy_does_nothing() {
         let mut app = app();
         app.state = ConnectionState::Connecting;
-        let before = app.transition_started;
+        app.last_error = Some("kept".into());
         let _ = app.update(Message::ToggleConnection);
-        assert_eq!(app.transition_started, before);
+        assert_eq!(app.last_error(), Some("kept"));
     }
 
     #[test]
-    fn the_controller_ends_the_transition_not_a_timer() {
-        // A connect that takes eight seconds must not show a settled dial after
-        // the animation's four.
+    fn the_moon_fills_when_connected_and_wanes_when_not() {
         let mut app = app();
-        app.transition_started = Some(Instant::now());
         let _ = app.apply(Event::State(ConnectionState::Connected));
-        assert!(app.transition_started.is_none());
-        assert_eq!(app.state, ConnectionState::Connected);
+        assert_eq!(app.phase.to, 1.0);
+        let _ = app.apply(Event::State(ConnectionState::Disconnected));
+        assert_eq!(app.phase.to, 0.0);
+    }
+
+    #[test]
+    fn picking_a_server_closes_the_list() {
+        let mut app = app();
+        let _ = app.update(Message::ToggleServers);
+        assert!(app.servers_open());
+        let _ = app.update(Message::SelectNode("Node A".into()));
+        assert!(!app.servers_open());
+    }
+
+    #[test]
+    fn tun_without_the_helper_goes_to_settings_and_follows_the_install() {
+        let mut app = app();
+        let _ = app.update(Message::ChooseMode(TunnelMode::Tun));
+        assert_eq!(app.page, Page::Settings);
+        assert_eq!(app.preferences.mode, TunnelMode::SystemProxy);
+        assert!(app.tun_awaiting_helper());
+        let _ = app.update(Message::HelperChanged(true));
+        assert_eq!(app.preferences.mode, TunnelMode::Tun);
+        assert!(!app.tun_awaiting_helper());
     }
 
     #[test]

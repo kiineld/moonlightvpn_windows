@@ -1,83 +1,517 @@
-//! The connect screen: the dial on the left, the server list on the right.
+//! The connect screen: the time connected, the moon, and the servers.
+//!
+//! As the macOS client lays it out. Closed, the moon is the page: large, with
+//! the column it heads — time, moon, state, servers — in the middle of the
+//! page. Opening the server list shrinks the moon and lifts the column to the
+//! top, and the list takes the room that frees, all on one curve.
 
-use iced::widget::{button, canvas, column, container, row, scrollable, text, tooltip};
+use iced::widget::{button, canvas, column, container, row, scrollable, text, tooltip, Space};
 use iced::{Alignment, Border, Element, Length};
 
-use moonlight_core::{format, ConnectionState, Node};
-use moonlight_design::motion::{border, metrics, radii};
-use moonlight_design::typography::{line, scale, EMPHATIC, ROW_TITLE};
+use moonlight_core::{format, ConnectionState, Node, TunnelMode};
+use moonlight_design::motion::{border, radii};
+use moonlight_design::typography::{scale, EMPHATIC, MEDIUM, ROW_TITLE};
 use moonlight_design::{icon, Icon};
 
 use crate::components;
-use crate::dial::Dial;
 use crate::localization::{t, S};
+use crate::moon::Moon;
 use crate::{hspace, localization, theme, vspace, Message, Moonlight, Page};
 
-/// The dial's drawn size, from the composition.
-const DIAL: f32 = metrics::DIAL;
+/// The moon with the list open; closed it is twice this.
+const MOON: f32 = 92.0;
+/// The picker pill's height.
+const PICKER: f32 = 60.0;
+/// The widest the column gets, list included.
+const COLUMN: f32 = 560.0;
+/// The time's size, and how wide each digit is given so the figures do not
+/// shift as they tick — the display face has no tabular digits.
+const TIME: f32 = 24.0;
+const DIGIT: f32 = TIME * 0.8;
+const COLON: f32 = TIME * 0.42;
 
-/// The dial's big label. Smaller than `--ml-t-hero`: 40px does not fit inside
-/// the ring alongside a status line and a timer, and the composition sets 26.
-const BIG_LABEL: f32 = 26.0;
-
-/// The widest the label may be: the chord across the ring where the label sits,
-/// less the 2px stroke and a margin, so type never touches the circle.
-const CHORD: f32 = DIAL * 0.78;
-
-/// The display face's advance per character, in ems.
-///
-/// Measured off `Unbounded-ExtraBold.ttf` rather than guessed: Cyrillic runs
-/// 0.83–0.85 em at this weight and Latin 0.73–0.79, so the Cyrillic worst case
-/// is the one to size against. An earlier pass assumed 0.62, which is why the
-/// label never shrank and crossed the ring instead.
-const LABEL_ADVANCE: f32 = 0.85;
-
-/// How big the label can be and still fit the chord.
-///
-/// iced has no `minimumScaleFactor`, so the shrink is computed rather than left
-/// to the text widget — which would wrap or spill instead.
-fn dial_label_size(label: &str) -> f32 {
-    let characters = label.chars().count().max(1) as f32;
-    (CHORD / (characters * LABEL_ADVANCE)).min(BIG_LABEL)
-}
-
-/// The stats strip's figures.
-const STAT_VALUE: f32 = 20.0;
+/// The connect shortcut, named in the moon's tooltip.
+const SHORTCUT: &str = "Ctrl+Shift+C";
 
 pub fn view(app: &Moonlight) -> Element<'_, Message> {
-    let columns = row![
-        container(dial_column(app))
-            .padding(24)
-            .height(Length::Fill)
-            .width(Length::Fill)
-            .style({
-                let palette = app.palette_of();
-                move |_| theme::panel(palette)
-            }),
-        // A fixed 340, as the macOS client sets it — not a portion. Proportional
-        // columns make the server list grow with the window, and the rows inside
-        // it are a fixed size, so it ends up as a narrow list in a wide box.
-        container(server_column(app))
-            .padding(16)
-            .height(Length::Fill)
-            .width(Length::Fixed(metrics::SERVER_COLUMN))
-            .style({
-                let palette = app.palette_of();
-                move |_| theme::panel(palette)
-            }),
-    ]
-    .spacing(metrics::GAP_COLUMNS)
-    .height(Length::Fill);
+    let open = app.drawer();
+    let has_nodes = !app.nodes().is_empty();
 
-    match app.announce() {
-        Some(message) => column![
-            components::announce_banner(message, Message::DismissAnnounce, app.palette_of()),
-            columns,
-        ]
-        .spacing(14)
-        .into(),
-        None => columns.into(),
+    // Spacers above and below centre the column while the list is closed,
+    // and give their room to the list as it opens: at `open` of the way the
+    // list has `open` of the free height. Weights, not measurements — iced
+    // shares out the height itself, so nothing has to be measured first.
+    let spacer = |weight: f32| Space::new().height(Length::FillPortion(portion(weight)));
+
+    let mut page = column![].align_x(Alignment::Center).width(Length::Fill);
+    if open < 1.0 {
+        page = page.push(spacer(1.0 - open));
     }
+    page = page
+        .push(timer(app))
+        .push(vspace(Length::Fixed(20.0)))
+        .push(moon(app, MOON * (2.0 - open)))
+        .push(below_moon(app));
+    if has_nodes && open > 0.0 {
+        page = page
+            .push(vspace(Length::Fixed(10.0)))
+            .push(drawer(app, open));
+    }
+    if open < 1.0 {
+        page = page.push(spacer(1.0 - open));
+    }
+
+    let page = container(page.max_width(COLUMN).height(Length::Fill))
+        .center_x(Length::Fill)
+        .height(Length::Fill);
+
+    // Over the page rather than in it, so its arrival moves nothing; at the
+    // foot, where it covers neither the time nor the moon.
+    match refresh_note(app) {
+        Some(note) => iced::widget::stack![
+            page,
+            container(note)
+                .center_x(Length::Fill)
+                .align_bottom(Length::Fill),
+        ]
+        .into(),
+        None => page.into(),
+    }
+}
+
+/// A share of the free height as a fill portion. Never zero: a zero portion
+/// is not "none" to iced but its own fill.
+fn portion(weight: f32) -> u16 {
+    (weight * 1000.0).round().clamp(1.0, 2000.0) as u16
+}
+
+/// How long the tunnel has been up.
+fn timer(app: &Moonlight) -> Element<'_, Message> {
+    let palette = app.palette_of();
+    let tone = if app.state().is_connected() {
+        palette.text
+    } else {
+        palette.text_muted
+    };
+
+    let mut figures = row![];
+    for character in format::duration(app.uptime()).chars() {
+        let width = if character.is_ascii_digit() {
+            DIGIT
+        } else {
+            COLON
+        };
+        figures = figures.push(
+            container(
+                text(character.to_string())
+                    .font(moonlight_design::display())
+                    .size(TIME)
+                    .color(tone),
+            )
+            .center_x(Length::Fixed(width)),
+        );
+    }
+
+    column![
+        text(t(S::ConnectionTime, app.locale_of()))
+            .size(12.0)
+            .font(moonlight_design::ui(MEDIUM))
+            .color(palette.text_muted),
+        figures,
+    ]
+    .spacing(2)
+    .align_x(Alignment::Center)
+    .into()
+}
+
+/// The moon, as the button that connects and disconnects.
+fn moon(app: &Moonlight, side: f32) -> Element<'_, Message> {
+    let palette = app.palette_of();
+    let state = app.state();
+    let has_subscription = app.preferences().subscription_url.is_some();
+
+    let press = button(
+        canvas(Moon {
+            palette,
+            phase: app.moon_phase(),
+            orbit: app.orbit(),
+            enabled: has_subscription,
+        })
+        .width(Length::Fixed(side))
+        .height(Length::Fixed(side)),
+    )
+    .on_press_maybe((has_subscription && !state.is_busy()).then_some(Message::ToggleConnection))
+    .padding(0)
+    .style(|_, _| button::Style::default());
+
+    let hint = if state.is_connected() {
+        S::PressToDisconnect
+    } else {
+        S::PressToConnect
+    };
+    tooltip(
+        press,
+        container(
+            text(format!("{} · {SHORTCUT}", t(hint, app.locale_of())))
+                .size(scale::META)
+                .color(palette.text),
+        )
+        .padding([6, 10])
+        .style(move |_| theme::panel(palette)),
+        tooltip::Position::Bottom,
+    )
+    .into()
+}
+
+/// The state and the mode, why it is not connected, the service's message,
+/// and the servers.
+fn below_moon(app: &Moonlight) -> Element<'_, Message> {
+    let palette = app.palette_of();
+    let locale = app.locale_of();
+    let state = app.state();
+
+    let mut below = column![
+        vspace(Length::Fixed(18.0)),
+        row![status_pill(app), mode_switch(app)]
+            .spacing(8)
+            .align_y(Alignment::Center)
+    ]
+    .align_x(Alignment::Center)
+    .width(Length::Fill);
+
+    // Why it is not connected — a failed connect first; failing that, why the
+    // subscription did not load. Not while the refresh note is saying the
+    // same thing.
+    let problem = app.last_error().map(str::to_string).or_else(|| {
+        app.refresh_note()
+            .is_none()
+            .then(|| {
+                app.refresh_issue()
+                    .map(|issue| localization::issue(issue, locale))
+            })
+            .flatten()
+    });
+    if let Some(problem) = problem.filter(|_| !state.is_connected()) {
+        below = below.push(vspace(Length::Fixed(14.0))).push(
+            container(
+                text(problem)
+                    .size(scale::META)
+                    .color(palette.danger)
+                    .align_x(Alignment::Center),
+            )
+            .max_width(440),
+        );
+    }
+    if let Some(message) = app.announce() {
+        below = below
+            .push(vspace(Length::Fixed(24.0)))
+            .push(components::announce_banner(
+                message,
+                Message::DismissAnnounce,
+                palette,
+            ));
+    }
+
+    below
+        .push(vspace(Length::Fixed(28.0)))
+        .push(servers(app))
+        .into()
+}
+
+/// The state in words, as a way into the connections screen. Filled with the
+/// accent's wash while the tunnel is up.
+fn status_pill(app: &Moonlight) -> Element<'_, Message> {
+    let palette = app.palette_of();
+    let state = app.state();
+    let connected = state.is_connected();
+    let label = match state {
+        ConnectionState::Connected => S::Connection,
+        ConnectionState::Connecting => S::Connecting,
+        ConnectionState::Disconnecting => S::Disconnecting,
+        ConnectionState::Disconnected | ConnectionState::Failed(_) => S::Disconnected,
+    };
+    let ink = if connected {
+        palette.accent_ink_strong
+    } else {
+        palette.text2
+    };
+
+    button(
+        container(
+            row![
+                text(t(label, app.locale_of()))
+                    .size(13.5)
+                    .font(moonlight_design::ui(ROW_TITLE))
+                    .color(ink),
+                moonlight_design::icon_thin(Icon::ChevronRight, 14.0, ink, 2.4),
+            ]
+            .spacing(5)
+            .align_y(Alignment::Center),
+        )
+        .center_y(Length::Fill),
+    )
+    .on_press(Message::Navigate(Page::Connections))
+    .height(Length::Fixed(34.0))
+    .padding(iced::Padding {
+        top: 0.0,
+        right: 12.0,
+        bottom: 0.0,
+        left: 16.0,
+    })
+    .style(move |_, status| {
+        let fill = if connected {
+            palette.accent_quiet
+        } else {
+            palette.surface
+        };
+        let rim = match status {
+            button::Status::Hovered | button::Status::Pressed => palette.accent_line,
+            _ => palette.hairline,
+        };
+        button::Style {
+            background: Some(iced::Background::Color(fill)),
+            text_color: ink,
+            border: Border {
+                radius: iced::border::Radius::from(radii::PILL),
+                width: border::HAIRLINE,
+                color: rim,
+            },
+            ..Default::default()
+        }
+    })
+    .into()
+}
+
+/// Proxy or TUN, beside the state it is in.
+fn mode_switch(app: &Moonlight) -> Element<'_, Message> {
+    components::segmented_compact(
+        &[
+            (
+                TunnelMode::SystemProxy,
+                t(S::ModeProxyShort, app.locale_of()),
+            ),
+            (TunnelMode::Tun, t(S::ModeTun, app.locale_of())),
+        ],
+        app.preferences().mode,
+        Message::ChooseMode,
+        app.palette_of(),
+    )
+}
+
+/// The heading, and the picker — or, before there is anything to pick, the
+/// way to add a subscription.
+fn servers(app: &Moonlight) -> Element<'_, Message> {
+    let palette = app.palette_of();
+    let locale = app.locale_of();
+    let nodes = app.nodes();
+
+    let mut heading = row![components::overline(t(S::Servers, locale), palette)]
+        .spacing(10)
+        .align_y(Alignment::Center);
+    if !nodes.is_empty() {
+        let count = nodes.iter().filter(|n| !n.is_auto_picker()).count();
+        heading = heading.push(
+            text(format!("{count} {}", t(S::Nodes, locale)))
+                .size(12.0)
+                .color(palette.text_muted),
+        );
+    }
+    heading = heading.push(hspace(Length::Fill));
+    // Ping and refresh sit over the list they act on, and only once there is
+    // a subscription to measure or fetch again.
+    if app.preferences().subscription_url.is_some() {
+        heading = heading.push(list_action(
+            app,
+            Icon::Activity,
+            if app.is_pinging() {
+                S::Measuring
+            } else {
+                S::Ping
+            },
+            app.is_pinging(),
+            Message::Ping,
+        ));
+        heading = heading.push(list_action(
+            app,
+            Icon::RefreshCw,
+            if app.is_refreshing() {
+                S::Refreshing
+            } else {
+                S::Refresh
+            },
+            app.is_refreshing(),
+            Message::Refresh,
+        ));
+    }
+
+    let body: Element<'_, Message> = if nodes.is_empty() {
+        container(components::empty_state_full(
+            Icon::Globe,
+            t(S::NoSubscription, locale).to_string(),
+            t(S::NoSubscriptionHint, locale).to_string(),
+            Some((
+                t(S::AddSubscription, locale).to_string(),
+                Message::Navigate(Page::Import),
+            )),
+            palette,
+        ))
+        .padding(8)
+        .width(Length::Fill)
+        .style(move |_| theme::panel(palette))
+        .into()
+    } else {
+        picker(app)
+    };
+
+    column![container(heading).padding([0, 6]), body]
+        .spacing(10)
+        .width(Length::Fill)
+        .into()
+}
+
+/// The server in use, and the way into the rest — one row until it is opened.
+fn picker(app: &Moonlight) -> Element<'_, Message> {
+    let palette = app.palette_of();
+    let locale = app.locale_of();
+
+    let picked = (!app.preferences().auto_select)
+        .then(|| app.preferences().selected_node.as_deref())
+        .flatten()
+        .and_then(|name| app.nodes().iter().find(|n| n.name == name));
+
+    let (glyph, title, subtitle): (Element<'_, Message>, String, String) = match picked {
+        Some(node) => (flag(app, node), node.title(), about(node, app)),
+        None => (
+            moonlight_design::icon_thin(Icon::Zap, 18.0, palette.accent_ink, 2.2),
+            t(S::Auto, locale).to_string(),
+            app.auto_choice()
+                .unwrap_or_else(|| t(S::AutoSubtitle, locale).to_string()),
+        ),
+    };
+
+    let chevron = if app.servers_open() {
+        Icon::ChevronUp
+    } else {
+        Icon::ChevronDown
+    };
+
+    button(
+        container(
+            row![
+                container(glyph)
+                    .center(Length::Fixed(40.0))
+                    .style(move |_| container::Style {
+                        background: Some(iced::Background::Color(palette.surface2)),
+                        border: Border {
+                            radius: iced::border::Radius::from(radii::PILL),
+                            ..Default::default()
+                        },
+                        ..Default::default()
+                    }),
+                column![
+                    text(title)
+                        .size(14.5)
+                        .font(moonlight_design::ui(EMPHATIC))
+                        .color(palette.text)
+                        .wrapping(iced::widget::text::Wrapping::None),
+                    text(subtitle)
+                        .size(12.0)
+                        .color(palette.text_muted)
+                        .wrapping(iced::widget::text::Wrapping::None),
+                ]
+                .spacing(1)
+                .width(Length::Fill),
+                moonlight_design::icon_thin(chevron, 15.0, palette.text2, 2.4),
+            ]
+            .spacing(12)
+            .align_y(Alignment::Center),
+        )
+        .center_y(Length::Fill),
+    )
+    .on_press(Message::ToggleServers)
+    .width(Length::Fill)
+    .height(Length::Fixed(PICKER))
+    .padding(iced::Padding {
+        top: 0.0,
+        right: 20.0,
+        bottom: 0.0,
+        left: 10.0,
+    })
+    .style(move |_, status| {
+        let rim = match status {
+            button::Status::Hovered | button::Status::Pressed => palette.accent_line,
+            _ => palette.hairline,
+        };
+        button::Style {
+            background: Some(iced::Background::Color(palette.surface)),
+            text_color: palette.text,
+            border: Border {
+                radius: iced::border::Radius::from(radii::PILL),
+                width: border::HAIRLINE,
+                color: rim,
+            },
+            ..Default::default()
+        }
+    })
+    .into()
+}
+
+/// Every server, under the picker. Always the same card; only the height it
+/// is given moves, from nothing to its content, and past the room there is it
+/// scrolls.
+fn drawer(app: &Moonlight, open: f32) -> Element<'_, Message> {
+    let palette = app.palette_of();
+
+    let mut rows = column![auto_row(app)].spacing(2);
+    let mut count = 1;
+    for node in app.nodes() {
+        // A panel that already offers a url-test picker makes the app's own
+        // Авто row redundant, so only one of the two is shown.
+        if node.is_auto_picker() {
+            continue;
+        }
+        let selected = !app.preferences().auto_select
+            && app.preferences().selected_node.as_deref() == Some(node.name.as_str());
+        rows = rows.push(node_row(app, node, selected));
+        count += 1;
+    }
+
+    // What the rows come to, so a short list is a short card rather than one
+    // stretched to the foot of the page. Rows are a fixed height; a little
+    // over is harmless, it only scrolls.
+    let content = 16.0 + count as f32 * ROW_ESTIMATE;
+
+    container(
+        scrollable(rows.padding(iced::Padding {
+            right: crate::SCROLLBAR_GUTTER,
+            ..iced::Padding::ZERO
+        }))
+        .direction(scrollable::Direction::Vertical(
+            scrollable::Scrollbar::new()
+                .width(crate::SCROLLBAR_WIDTH)
+                .scroller_width(crate::SCROLLBAR_WIDTH)
+                .margin(crate::SCROLLBAR_MARGIN),
+        ))
+        .height(Length::Fill)
+        .style(move |theme, _| theme::scroller(palette, theme)),
+    )
+    .padding(8)
+    .width(Length::Fill)
+    .height(Length::FillPortion(portion(2.0 * open)))
+    .max_height(content)
+    .style(move |_| theme::panel(palette))
+    .into()
+}
+
+/// A row's height in the list: 10 above and below two lines of type.
+const ROW_ESTIMATE: f32 = 58.0;
+
+/// What a server is for, when the service says; otherwise its country and
+/// transport.
+fn about(node: &Node, app: &Moonlight) -> String {
+    node.description
+        .clone()
+        .unwrap_or_else(|| node.subtitle(app.locale_of()))
 }
 
 /// What the refresh the user asked for came to: updated, or not and why.
@@ -121,368 +555,6 @@ fn refresh_note(app: &Moonlight) -> Option<Element<'_, Message>> {
         .style(move |_, status| theme::row_button(palette, false, status))
         .into(),
     )
-}
-
-fn dial_column(app: &Moonlight) -> Element<'_, Message> {
-    let palette = app.palette_of();
-    let locale = app.locale_of();
-    let state = app.state();
-    let connected = state.is_connected();
-
-    // One tone drives the status label, the dot and the timer — the composition
-    // keys all three off whether the tunnel is up, not off three separate roles.
-    let (label, tone) = match state {
-        ConnectionState::Connected => (S::StateSecure, palette.accent_ink),
-        ConnectionState::Connecting => (S::Connecting, palette.text2),
-        ConnectionState::Disconnecting => (S::Disconnecting, palette.text2),
-        ConnectionState::Failed(_) => (S::StateFailed, palette.danger),
-        ConnectionState::Disconnected => (S::StateDisconnected, palette.text_muted),
-    };
-
-    // The dial is *dimmed*, not recoloured, when there is nothing to connect to
-    // — the macOS client drops the whole control to 50%. Swapping the palette
-    // instead makes a disabled dial look like a differently-styled live one.
-    let has_subscription = app.preferences().subscription_url.is_some();
-    let dim = |color: iced::Color| {
-        if has_subscription {
-            color
-        } else {
-            theme::alpha(color, 0.5)
-        }
-    };
-    let tone = dim(tone);
-
-    // "Соединение" while up, not "Отключить": the dial names what you *have*,
-    // and the hint under it says what pressing does.
-    let action = match state {
-        ConnectionState::Connected => S::Connection,
-        ConnectionState::Connecting => S::Connecting,
-        ConnectionState::Disconnecting => S::Disconnecting,
-        _ => S::Connect,
-    };
-
-    let face = column![
-        row![
-            // 8px, and it glows while connected — the one glow the system
-            // allows, reserved for tiny accent marks like this.
-            container(vspace(Length::Fixed(8.0)))
-                .width(Length::Fixed(8.0))
-                .style(move |_| container::Style {
-                    background: Some(iced::Background::Color(tone)),
-                    border: Border {
-                        radius: iced::border::Radius::from(radii::PILL),
-                        ..Default::default()
-                    },
-                    shadow: if connected {
-                        theme::glow_sm(tone)
-                    } else {
-                        iced::Shadow::default()
-                    },
-                    ..Default::default()
-                }),
-            text(t(label, locale))
-                .size(scale::MICRO)
-                .font(moonlight_design::ui(EMPHATIC))
-                .color(tone),
-        ]
-        .spacing(7)
-        .align_y(Alignment::Center),
-        // Kept inside the ring, by *shrinking* rather than by being given a
-        // narrow box to overflow. Constraining the width alone did not work:
-        // iced wraps or spills, it does not scale type down the way the macOS
-        // client's `minimumScaleFactor` does, so "Подключение…" still crossed
-        // both edges of the circle.
-        container(
-            text(t(action, locale))
-                .font(moonlight_design::display())
-                .size(dial_label_size(t(action, locale)))
-                .line_height(line::TIGHT)
-                .align_x(Alignment::Center)
-                .wrapping(iced::widget::text::Wrapping::None)
-                .color(dim(palette.text)),
-        )
-        .width(Length::Fixed(CHORD))
-        .align_x(Alignment::Center),
-        text(format::duration(app.uptime()))
-            .font(moonlight_design::mono())
-            .size(15.0)
-            .color(tone),
-    ]
-    .spacing(7)
-    .align_x(Alignment::Center);
-
-    let ring = canvas(Dial::new(
-        state.clone(),
-        palette,
-        app.progress(),
-        app.breath(),
-    ))
-    .width(Length::Fixed(DIAL))
-    .height(Length::Fixed(DIAL));
-
-    let disc = iced::widget::stack![
-        container(ring)
-            .center_x(Length::Fixed(DIAL))
-            .center_y(Length::Fixed(DIAL)),
-        container(face)
-            .center_x(Length::Fixed(DIAL))
-            .center_y(Length::Fixed(DIAL)),
-    ];
-
-    let can_press = !state.is_busy() && app.preferences().subscription_url.is_some();
-    let press = button(disc)
-        .on_press_maybe(can_press.then_some(Message::ToggleConnection))
-        .padding(0)
-        .style(move |_, status| {
-            let mut style = theme::row_button(palette, false, status);
-            style.border.radius = iced::border::Radius::from(DIAL / 2.0);
-            style
-        });
-
-    // A failed connect first; failing that, why the subscription did not load —
-    // which, with nothing cached yet, is why there is nothing to connect to.
-    // Not while the refresh note below is saying the same thing.
-    let problem = app.last_error().map(str::to_string).or_else(|| {
-        app.refresh_note()
-            .is_none()
-            .then(|| {
-                app.refresh_issue()
-                    .map(|issue| localization::issue(issue, locale))
-            })
-            .flatten()
-    });
-    let hint: Element<'_, Message> = match problem {
-        // A failure replaces the hint rather than sitting beside it: the hint
-        // says "press to connect", which is exactly what has just not worked.
-        Some(error) => text(error).size(scale::META).color(palette.danger).into(),
-        None if app.preferences().subscription_url.is_none() => text(t(S::NoSubscription, locale))
-            .size(scale::META)
-            .color(palette.text_muted)
-            .into(),
-        None => text(t(
-            if connected {
-                S::PressToDisconnect
-            } else {
-                S::PressToConnect
-            },
-            locale,
-        ))
-        .size(scale::META)
-        .color(palette.text_muted)
-        .into(),
-    };
-
-    let hint_row = row![
-        hint,
-        // The shortcut lives in a chip beside the hint rather than in the hint's
-        // own sentence, so the sentence stays translatable and the keys stay
-        // monospaced.
-        container(
-            text(SHORTCUT)
-                .font(moonlight_design::mono())
-                .size(11.0)
-                .color(palette.text2)
-        )
-        .padding([0, 8])
-        .height(Length::Fixed(22.0))
-        .align_y(Alignment::Center)
-        .style(move |_| container::Style {
-            background: Some(iced::Background::Color(palette.surface2)),
-            border: Border {
-                radius: iced::border::Radius::from(radii::CHIP),
-                width: border::HAIRLINE,
-                color: palette.hairline,
-            },
-            ..Default::default()
-        }),
-    ]
-    .spacing(9)
-    .align_y(Alignment::Center);
-
-    let mut stack = column![press, hint_row, stats(app)]
-        .spacing(20)
-        .align_x(Alignment::Center);
-    if let Some(note) = refresh_note(app) {
-        stack = stack.push(note);
-    }
-
-    container(stack)
-        // Centred in whatever height the panel has, which is what
-        // `justify-content:center` does in the composition — and unlike a pair of
-        // Fill spacers it still works when the height is unbounded.
-        .center_x(Length::Fill)
-        .center_y(Length::Fill)
-        .into()
-}
-
-/// The connect shortcut. The composition spells it per platform; this build is
-/// the Windows one.
-const SHORTCUT: &str = "Ctrl+Shift+C";
-
-/// The three figures under the dial are what is **left** — traffic and time —
-/// rather than what the session has spent. Session byte counters are the least
-/// actionable numbers on the screen; how much plan remains is what people open
-/// the app to check.
-fn stats(app: &Moonlight) -> Element<'_, Message> {
-    let palette = app.palette_of();
-    let locale = app.locale_of();
-    let info = app.info();
-
-    let cell = |label: S, value: String| {
-        column![
-            text(t(label, locale))
-                .size(scale::MICRO)
-                .color(palette.text_muted),
-            text(value)
-                .font(moonlight_design::display())
-                .size(STAT_VALUE)
-                .color(palette.text),
-        ]
-        .spacing(6)
-        .align_x(Alignment::Center)
-        .width(Length::Fill)
-    };
-
-    // Before a plan exists the figures read **zero**, not "—". A dash is an
-    // answer about a plan, and showing one before there is a plan reads as a
-    // subscription whose panel omitted a field.
-    let has_subscription = app.preferences().subscription_url.is_some();
-
-    let traffic_left = if !has_subscription {
-        format::bytes(Some(0), locale)
-    } else {
-        match info.total {
-            Some(total) => {
-                format::bytes(Some(total.saturating_sub(info.used().unwrap_or(0))), locale)
-            }
-            None => t(S::Unlimited, locale).to_string(),
-        }
-    };
-
-    let time_left = if has_subscription {
-        format::time_left(info.expire, locale)
-    } else {
-        format::days(Some(0), locale)
-    };
-
-    container(
-        row![
-            cell(S::TrafficLeft, traffic_left),
-            divider(app),
-            cell(S::Remaining, time_left),
-        ]
-        .align_y(Alignment::Center),
-    )
-    .width(Length::Fixed(metrics::STATS_MAX))
-    .padding([16, 6])
-    .style(move |_| theme::card(palette))
-    .into()
-}
-
-fn divider(app: &Moonlight) -> Element<'_, Message> {
-    let palette = app.palette_of();
-    container(hspace(Length::Fixed(1.0)))
-        .height(Length::Fixed(38.0))
-        .style(move |_| container::Style {
-            background: Some(iced::Background::Color(palette.hairline)),
-            ..Default::default()
-        })
-        .into()
-}
-
-fn server_column(app: &Moonlight) -> Element<'_, Message> {
-    let palette = app.palette_of();
-    let locale = app.locale_of();
-    let nodes = app.nodes();
-
-    let mut heading = row![
-        components::overline(t(S::Servers, locale), palette),
-        text(format!("{} {}", nodes.len(), t(S::Nodes, locale)))
-            .size(12.0)
-            .color(palette.text_muted),
-        hspace(Length::Fill),
-    ]
-    .spacing(10)
-    .align_y(Alignment::Center);
-    // Ping and refresh sit over the list they act on, as on macOS, and only
-    // once there is a subscription to measure or fetch again.
-    if app.preferences().subscription_url.is_some() {
-        heading = heading.push(list_action(
-            app,
-            Icon::Activity,
-            if app.is_pinging() {
-                S::Measuring
-            } else {
-                S::Ping
-            },
-            app.is_pinging(),
-            Message::Ping,
-        ));
-        heading = heading.push(list_action(
-            app,
-            Icon::RefreshCw,
-            if app.is_refreshing() {
-                S::Refreshing
-            } else {
-                S::Refresh
-            },
-            app.is_refreshing(),
-            Message::Refresh,
-        ));
-    }
-    let heading = container(heading).padding([2, 4]);
-
-    let mut list = column![heading, vspace(Length::Fixed(12.0))].spacing(2);
-
-    // With no nodes the panel is *only* the empty state. Keeping the Авто row
-    // above it offers a choice between servers that do not exist.
-    if nodes.is_empty() {
-        list = list.push(components::empty_state_full(
-            Icon::Globe,
-            t(S::NoSubscription, locale).to_string(),
-            t(S::NoSubscriptionHint, locale).to_string(),
-            Some((
-                t(S::AddSubscription, locale).to_string(),
-                Message::Navigate(Page::Import),
-            )),
-            palette,
-        ));
-    } else {
-        list = list.push(auto_row(app));
-        list = list.push(vspace(Length::Fixed(8.0)));
-        list = list.push(components::soft_divider(palette));
-        list = list.push(vspace(Length::Fixed(8.0)));
-
-        // The nodes scroll; the heading and Авто stay put. A panel of seven is
-        // fine either way, but a panel of thirty had its tail simply cut off at
-        // the bottom of the card with no way to reach it.
-        let mut rows = column![].spacing(2);
-        for node in nodes {
-            // A panel that already offers a url-test picker makes the app's own
-            // Авто row redundant, so only one of the two is shown.
-            if node.is_auto_picker() {
-                continue;
-            }
-            let selected = app.preferences().selected_node.as_deref() == Some(node.name.as_str());
-            rows = rows.push(node_row(app, node, selected));
-        }
-        list = list.push(
-            scrollable(rows.padding(iced::Padding {
-                right: crate::SCROLLBAR_GUTTER,
-                ..iced::Padding::ZERO
-            }))
-            .direction(scrollable::Direction::Vertical(
-                scrollable::Scrollbar::new()
-                    .width(crate::SCROLLBAR_WIDTH)
-                    .scroller_width(crate::SCROLLBAR_WIDTH)
-                    .margin(crate::SCROLLBAR_MARGIN),
-            ))
-            .height(Length::Fill)
-            .style(move |theme, _| theme::scroller(palette, theme)),
-        );
-    }
-
-    list.height(Length::Fill).width(Length::Fill).into()
 }
 
 /// A round glyph button over the server list, named by its tooltip. Its glyph
@@ -600,7 +672,6 @@ pub fn flag<'a>(app: &'a Moonlight, node: &'a Node) -> Element<'a, Message> {
 
 fn node_row<'a>(app: &'a Moonlight, node: &'a Node, selected: bool) -> Element<'a, Message> {
     let palette = app.palette_of();
-    let locale = app.locale_of();
 
     let flag = flag(app, node);
 
@@ -644,9 +715,12 @@ fn node_row<'a>(app: &'a Moonlight, node: &'a Node, selected: bool) -> Element<'
                 .size(scale::BODY_SM)
                 .font(moonlight_design::ui(ROW_TITLE))
                 .color(palette.text),
-            text(node.subtitle(locale))
+            // What the service says the row is for, when it says — "Poland LTE
+            // 1" means little until "Доступность во время БС" is under it.
+            text(about(node, app))
                 .size(12.0)
-                .color(palette.text_muted),
+                .color(palette.text_muted)
+                .wrapping(iced::widget::text::Wrapping::None),
         ]
         .spacing(1)
         .width(Length::Fill),
@@ -666,51 +740,13 @@ fn node_row<'a>(app: &'a Moonlight, node: &'a Node, selected: bool) -> Element<'
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::localization::t;
-    use moonlight_core::AppLocale;
-
-    /// Every string the dial's big label is ever set to, in both languages.
-    fn labels() -> Vec<String> {
-        let mut out = Vec::new();
-        for locale in [AppLocale::Ru, AppLocale::En] {
-            for key in [S::Connect, S::Connection, S::Connecting, S::Disconnecting] {
-                out.push(t(key, locale).to_string());
-            }
-        }
-        out
-    }
 
     #[test]
-    fn no_dial_label_is_wider_than_the_ring() {
-        // The failure this guards is not a panic: the label simply crosses the
-        // circle and sits on top of it, which looks like a broken layout rather
-        // than a long word.
-        for label in labels() {
-            let width = label.chars().count() as f32 * dial_label_size(&label) * LABEL_ADVANCE;
-            assert!(
-                width <= CHORD + 0.5,
-                "{label:?} renders {width:.0}pt wide in a {CHORD:.0}pt chord"
-            );
-        }
-    }
-
-    #[test]
-    fn a_short_label_still_gets_the_full_display_step() {
-        // Shrinking is for the ones that need it. "Подключить" must not come out
-        // smaller than the composition sets simply because the rule exists.
-        assert_eq!(dial_label_size(t(S::Connect, AppLocale::Ru)), BIG_LABEL);
-        assert_eq!(dial_label_size(t(S::Connection, AppLocale::Ru)), BIG_LABEL);
-    }
-
-    #[test]
-    fn the_long_labels_are_shrunk_rather_than_clipped() {
-        // "Подключение…" and "Отключение…" are the two that do not fit at the
-        // composition's 26.
-        for key in [S::Connecting, S::Disconnecting] {
-            let long = t(key, AppLocale::Ru);
-            assert!(dial_label_size(long) < BIG_LABEL, "{long:?} was not shrunk");
-            // But not so far that it stops reading as the dial's headline.
-            assert!(dial_label_size(long) > 16.0, "{long:?} shrank too far");
-        }
+    fn the_list_takes_the_room_the_spacers_give_up() {
+        // Half open: the list's share equals both spacers' together, so it has
+        // half the free height. Closed and open, nothing rounds to zero.
+        assert_eq!(portion(2.0 * 0.5), 2 * portion(1.0 - 0.5));
+        assert_eq!(portion(0.0), 1);
+        assert_eq!(portion(2.0), 2000);
     }
 }

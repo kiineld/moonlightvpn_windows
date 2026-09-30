@@ -57,6 +57,7 @@ fn tunnel(app: &Moonlight) -> Element<'_, Message> {
     ]
     .spacing(0);
 
+    let awaiting = app.tun_awaiting_helper() && !app.helper_installed();
     let (helper_title, helper_note, helper_action) = if app.helper_installed() {
         (
             t(S::HelperInstalled, locale),
@@ -81,7 +82,15 @@ fn tunnel(app: &Moonlight) -> Element<'_, Message> {
         )
         .on_press(helper_action.1)
         .padding([10, 16])
-        .style(move |_, status| theme::header_button(palette, status))
+        .style(move |_, status| {
+            // TUN was asked for on the connect page and sent here: the install
+            // is the thing to do, so it is the filled button.
+            if awaiting {
+                theme::accent_button(palette, status)
+            } else {
+                theme::header_button(palette, status)
+            }
+        })
         .into(),
         palette,
     ));
