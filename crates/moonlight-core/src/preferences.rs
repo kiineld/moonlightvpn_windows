@@ -28,7 +28,7 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::models::{AppLocale, RoutingMode, SplitMode, SubscriptionInfo, TunnelMode};
-use crate::split_rule::SplitRule;
+use crate::rules::{RoutingRule, SplitRule};
 use crate::system_proxy::Snapshot;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -44,6 +44,10 @@ pub struct Preferences {
     pub mode: TunnelMode,
     /// Rules, everything through the server, or nothing — see [`RoutingMode`].
     pub routing_mode: RoutingMode,
+    /// The user's own routing rules, in order — see [`crate::rules`].
+    pub routing_rules: Vec<RoutingRule>,
+    /// The apps screen's mode and rules, from before the rules page. Read once
+    /// at the next launch, carried over into `routing_rules`, then cleared.
     pub split_mode: SplitMode,
     pub split_rules: Vec<SplitRule>,
     /// Node name → last measured latency in milliseconds.
@@ -118,6 +122,7 @@ impl Default for Preferences {
             auto_select: true,
             mode: TunnelMode::SystemProxy,
             routing_mode: RoutingMode::Rule,
+            routing_rules: Vec::new(),
             split_mode: SplitMode::All,
             split_rules: Vec::new(),
             latencies: HashMap::new(),
@@ -245,40 +250,12 @@ impl Preferences {
         self.unreachable.retain(|name| live_nodes.contains(name));
     }
 
-    /// The rules the app-list toggles contribute, keyed by executable.
-    pub fn app_rules(&self) -> Vec<&SplitRule> {
-        self.split_rules
-            .iter()
-            .filter(|r| r.is_from_app_list())
-            .collect()
-    }
-
-    pub fn toggle_app(&mut self, executable: &str) {
-        match self
-            .split_rules
-            .iter()
-            .position(|r| r.app_executable.as_deref() == Some(executable))
-        {
-            // Only the generated rule is removed; a hand-written rule for the
-            // same process is left alone.
-            Some(index) => {
-                self.split_rules.remove(index);
-            }
-            None => self.split_rules.push(SplitRule::for_app(executable)),
-        }
-    }
-
-    pub fn has_app(&self, executable: &str) -> bool {
-        self.split_rules
-            .iter()
-            .any(|r| r.app_executable.as_deref() == Some(executable))
-    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::split_rule::Kind;
+    use crate::rules::{Kind, Priority, DIRECT};
 
     #[test]
     fn defaults_are_a_usable_state() {
@@ -337,7 +314,7 @@ mod tests {
     fn preferences_round_trip() {
         let mut prefs = Preferences {
             subscription_url: Some("https://panel/sub".into()),
-            split_rules: vec![SplitRule::new(Kind::Domain, "x.com")],
+            routing_rules: vec![RoutingRule::new(Kind::Domain, "x.com", DIRECT, Priority::Extend)],
             ..Default::default()
         };
         prefs.record_latency("Node A", Some(37));
@@ -398,34 +375,6 @@ mod tests {
         prefs.prune_latencies(&["Kept".to_string()]);
         assert_eq!(prefs.latency("Old"), None);
         assert_eq!(prefs.latency("Kept"), Some(20));
-    }
-
-    #[test]
-    fn toggling_an_app_adds_then_removes_its_own_rule() {
-        let mut prefs = Preferences::default();
-        assert!(!prefs.has_app("chrome.exe"));
-
-        prefs.toggle_app("chrome.exe");
-        assert!(prefs.has_app("chrome.exe"));
-        assert_eq!(prefs.split_rules.len(), 1);
-
-        prefs.toggle_app("chrome.exe");
-        assert!(!prefs.has_app("chrome.exe"));
-        assert!(prefs.split_rules.is_empty());
-    }
-
-    #[test]
-    fn removing_an_app_leaves_a_hand_written_rule_for_the_same_process() {
-        let mut prefs = Preferences::default();
-        prefs
-            .split_rules
-            .push(SplitRule::new(Kind::ProcessName, "chrome.exe"));
-        prefs.toggle_app("chrome.exe");
-        assert_eq!(prefs.split_rules.len(), 2);
-
-        prefs.toggle_app("chrome.exe");
-        assert_eq!(prefs.split_rules.len(), 1, "the hand-written rule survives");
-        assert!(!prefs.split_rules[0].is_from_app_list());
     }
 
     #[test]

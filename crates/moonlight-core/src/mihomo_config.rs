@@ -10,13 +10,13 @@
 //! - `allow-lan: false` and a loopback bind — this is a single-machine client,
 //!   and an unbound listener is an open proxy on the network
 //! - the TUN block, when the tunnel runs in TUN mode
-//! - split-tunnel rules, prepended (see [`apply_split`])
+//! - the user's own rules, placed around the panel's (see [`rules::place`])
 
 use serde_yaml::{Mapping, Value};
 use thiserror::Error;
 
-use crate::models::{SplitMode, TunnelMode};
-use crate::split_rule::SplitRule;
+use crate::models::TunnelMode;
+use crate::rules::{self, RoutingRule};
 
 /// The target the latency probe and the injected `url-test` group both use.
 /// Kept here as well as in [`crate::api`] so a config can be built without a
@@ -26,9 +26,6 @@ pub const PROBE_URL: &str = "http://cp.cloudflare.com/generate_204";
 pub const DEFAULT_SELECTOR: &str = "MOONLIGHT";
 pub const DEFAULT_AUTO_GROUP: &str = "MOONLIGHT-AUTO";
 
-/// The sub-rule name the [`SplitMode::Only`] mode delegates the panel's routing
-/// to.
-const PANEL_SUB_RULE: &str = "moonlight-panel";
 
 #[derive(Debug, Clone)]
 pub struct Overrides {
@@ -36,10 +33,8 @@ pub struct Overrides {
     pub secret: String,
     pub mixed_port: u16,
     pub mode: TunnelMode,
-    pub split_mode: SplitMode,
-    /// Every rule the split screen contributes — the app toggles and the
-    /// hand-written ones alike.
-    pub split_rules: Vec<SplitRule>,
+    /// The user's own rules, placed around the subscription's.
+    pub routing_rules: Vec<RoutingRule>,
     pub log_level: String,
     pub routing_mode: crate::models::RoutingMode,
 }
@@ -51,8 +46,7 @@ impl Default for Overrides {
             secret: String::new(),
             mixed_port: 7897,
             mode: TunnelMode::SystemProxy,
-            split_mode: SplitMode::All,
-            split_rules: Vec::new(),
+            routing_rules: Vec::new(),
             log_level: "warning".to_string(),
             routing_mode: Default::default(),
         }
@@ -157,13 +151,20 @@ pub fn build(panel_yaml: &str, overrides: &Overrides) -> Result<String, Failure>
         rules = vec![format!("MATCH,{DEFAULT_SELECTOR}")];
     }
 
-    let selector = primary_selector_name(&groups, &rules);
-    let composed = apply_split(
+    // The user's rules may name any group or server the config has, or the
+    // two built-in targets; a rule naming anything else is left out.
+    let mut targets: std::collections::HashSet<String> =
+        [rules::DIRECT, rules::REJECT].into_iter().map(String::from).collect();
+    for entry in groups.iter().chain(proxies.iter()) {
+        if let Some(name) = entry.get(key("name")).and_then(Value::as_str) {
+            targets.insert(name.to_string());
+        }
+    }
+    let composed = rules::place(
+        &overrides.routing_rules,
         &rules,
-        overrides.split_mode,
-        &overrides.split_rules,
-        &selector,
-        &mut root,
+        &targets,
+        overrides.mode == TunnelMode::Tun,
     );
     root.insert(
         key("rules"),
@@ -274,72 +275,34 @@ pub fn primary_selector_name(groups: &[Value], rules: &[String]) -> String {
         .unwrap_or_else(|| DEFAULT_SELECTOR.to_string())
 }
 
-/// Composes the split mode with the panel's own routing.
-///
-/// The three modes are not symmetric, because preserving the panel's rules means
-/// something different in each:
-///
-/// - **all** — the panel's rules, untouched.
-/// - **except** — the split rules are prepended pointing at `DIRECT`. This
-///   composes cleanly: what they match never reaches the panel's rules, and
-///   everything else sees them exactly as written.
-/// - **only** — what the split rules match is handed to the panel's rules
-///   through a `SUB-RULE`, and everything else falls to `MATCH,DIRECT`. Pointing
-///   them straight at the selector instead would work, but it would force *all*
-///   of that traffic through the node — including the hosts the panel
-///   deliberately routes direct — so a selected browser would lose the panel's
-///   split for local sites.
-///
-/// An empty selection in [`SplitMode::Only`] falls back to tunnelling
-/// everything: an empty allow-list routes nothing at all, which reads as a
-/// broken VPN rather than as a configuration choice.
-pub fn apply_split(
-    rules: &[String],
-    mode: SplitMode,
-    split_rules: &[SplitRule],
-    _selector: &str,
-    root: &mut Mapping,
-) -> Vec<String> {
-    let active: Vec<&SplitRule> = split_rules
-        .iter()
-        .filter(|r| r.enabled && !r.value.trim().is_empty())
-        .collect();
-
-    match mode {
-        SplitMode::All => rules.to_vec(),
-
-        SplitMode::Except => {
-            if active.is_empty() {
-                return rules.to_vec();
-            }
-            let mut out: Vec<String> = active.iter().map(|r| r.line("DIRECT")).collect();
-            out.extend_from_slice(rules);
-            out
-        }
-
-        SplitMode::Only => {
-            if active.is_empty() {
-                return rules.to_vec();
-            }
-            let mut sub_rules = root
-                .get(key("sub-rules"))
-                .and_then(Value::as_mapping)
-                .cloned()
-                .unwrap_or_default();
-            sub_rules.insert(
-                key(PANEL_SUB_RULE),
-                Value::Sequence(rules.iter().cloned().map(Value::from).collect()),
-            );
-            root.insert(key("sub-rules"), Value::Mapping(sub_rules));
-
-            let mut out: Vec<String> = active
-                .iter()
-                .map(|r| format!("SUB-RULE,{},{PANEL_SUB_RULE}", r.matcher()))
-                .collect();
-            out.push("MATCH,DIRECT".to_string());
-            out
-        }
+/// What the rules page needs from a subscription: its groups, in order —
+/// the targets a rule can name besides DIRECT and REJECT — and its own rules,
+/// to list.
+pub fn routing_inputs(panel_yaml: &str) -> (Vec<String>, Vec<String>) {
+    let Ok(root) = serde_yaml::from_str::<Value>(panel_yaml) else {
+        return (Vec::new(), Vec::new());
+    };
+    let names = |section: &str| -> Vec<String> {
+        root.get(section)
+            .and_then(Value::as_sequence)
+            .into_iter()
+            .flatten()
+            .filter_map(|entry| entry.get("name")?.as_str().map(str::to_string))
+            .collect()
+    };
+    let mut groups = names("proxy-groups");
+    // A config with no groups gets the app's own when it is built.
+    if groups.is_empty() && root.get("proxies").is_some() {
+        groups = vec![DEFAULT_SELECTOR.to_string(), DEFAULT_AUTO_GROUP.to_string()];
     }
+    let rules = root
+        .get("rules")
+        .and_then(Value::as_sequence)
+        .into_iter()
+        .flatten()
+        .filter_map(|r| r.as_str().map(str::to_string))
+        .collect();
+    (groups, rules)
 }
 
 pub fn tun_block() -> Mapping {
@@ -551,7 +514,7 @@ proxy-groups:
         assert!(panel_order("rules: []").is_empty());
         assert!(panel_order("not: [valid").is_empty());
     }
-    use crate::split_rule::Kind;
+    use crate::rules::{Kind, Priority, RoutingRule};
 
     const PANEL: &str = r#"
 proxies:
@@ -733,103 +696,6 @@ rules:
     }
 
     #[test]
-    fn all_mode_leaves_routing_alone() {
-        let mut root = Mapping::new();
-        let rules = vec!["MATCH,X".to_string()];
-        let out = apply_split(
-            &rules,
-            SplitMode::All,
-            &[SplitRule::new(Kind::ProcessName, "a.exe")],
-            "X",
-            &mut root,
-        );
-        assert_eq!(out, rules);
-        assert!(!root.contains_key(key("sub-rules")));
-    }
-
-    #[test]
-    fn except_mode_prepends_direct_rules_ahead_of_the_panels() {
-        let mut root = Mapping::new();
-        let rules = vec!["GEOSITE,ru,DIRECT".to_string(), "MATCH,X".to_string()];
-        let out = apply_split(
-            &rules,
-            SplitMode::Except,
-            &[SplitRule::new(Kind::ProcessName, "steam.exe")],
-            "X",
-            &mut root,
-        );
-        assert_eq!(
-            out,
-            vec![
-                "PROCESS-NAME,steam.exe,DIRECT",
-                "GEOSITE,ru,DIRECT",
-                "MATCH,X"
-            ]
-        );
-    }
-
-    #[test]
-    fn only_mode_hands_matches_to_the_panels_rules_through_a_sub_rule() {
-        // Pointing at the selector directly would force the panel's
-        // deliberately-direct hosts through the node too.
-        let mut root = Mapping::new();
-        let rules = vec!["GEOSITE,ru,DIRECT".to_string(), "MATCH,X".to_string()];
-        let out = apply_split(
-            &rules,
-            SplitMode::Only,
-            &[SplitRule::new(Kind::ProcessName, "chrome.exe")],
-            "X",
-            &mut root,
-        );
-        assert_eq!(
-            out,
-            vec![
-                "SUB-RULE,(PROCESS-NAME,chrome.exe),moonlight-panel",
-                "MATCH,DIRECT"
-            ]
-        );
-
-        let sub = root
-            .get(key("sub-rules"))
-            .and_then(Value::as_mapping)
-            .expect("sub-rules");
-        let panel = sub
-            .get(key("moonlight-panel"))
-            .and_then(Value::as_sequence)
-            .expect("the panel's rules move into the sub-rule");
-        assert_eq!(panel.len(), 2);
-    }
-
-    #[test]
-    fn an_empty_allow_list_tunnels_everything_rather_than_nothing() {
-        // An empty "only these" routes nothing at all, which reads as a broken
-        // VPN rather than as a configuration choice.
-        let mut root = Mapping::new();
-        let rules = vec!["MATCH,X".to_string()];
-        let out = apply_split(&rules, SplitMode::Only, &[], "X", &mut root);
-        assert_eq!(out, rules);
-        assert!(!root.contains_key(key("sub-rules")));
-    }
-
-    #[test]
-    fn disabled_and_blank_rules_are_not_written() {
-        let mut root = Mapping::new();
-        let mut disabled = SplitRule::new(Kind::ProcessName, "a.exe");
-        disabled.enabled = false;
-        let blank = SplitRule::new(Kind::ProcessName, "   ");
-
-        let rules = vec!["MATCH,X".to_string()];
-        let out = apply_split(
-            &rules,
-            SplitMode::Except,
-            &[disabled, blank],
-            "X",
-            &mut root,
-        );
-        assert_eq!(out, rules, "no active rule means no change");
-    }
-
-    #[test]
     fn tun_mode_adds_the_interface_and_the_dns_that_makes_it_resolve() {
         let mut o = overrides();
         o.mode = TunnelMode::Tun;
@@ -907,17 +773,41 @@ rules:
     }
 
     #[test]
-    fn the_built_config_is_valid_yaml_that_round_trips() {
+    fn the_users_rules_land_around_the_panels_and_name_only_what_exists() {
         let mut o = overrides();
-        o.split_mode = SplitMode::Only;
-        o.split_rules = vec![
-            SplitRule::new(Kind::ProcessName, "chrome.exe"),
-            SplitRule::new(Kind::IpCidr, "10.0.0.0/8"),
+        o.routing_rules = vec![
+            RoutingRule::new(Kind::DomainSuffix, "a.com", "DIRECT", Priority::Override),
+            RoutingRule::new(Kind::DomainSuffix, "b.com", "PANEL-SELECT", Priority::Extend),
+            RoutingRule::new(Kind::DomainSuffix, "c.com", "Node B", Priority::Extend),
+            // A group the panel dropped: left out, or the core refuses it all.
+            RoutingRule::new(Kind::DomainSuffix, "d.com", "Gone", Priority::Override),
+            // No TUN here, so no process to match on.
+            RoutingRule::new(Kind::ProcessName, "a.exe", "DIRECT", Priority::Override),
         ];
         let built = build(PANEL, &o).expect("builds");
-        let root = parse(&built);
-        assert!(root.contains_key(key("sub-rules")));
-        assert_eq!(rules_of(&root).len(), 3);
+        assert_eq!(
+            rules_of(&parse(&built)),
+            vec![
+                "DOMAIN-SUFFIX,a.com,DIRECT",
+                "GEOSITE,category-ru,DIRECT",
+                "DOMAIN-SUFFIX,b.com,PANEL-SELECT",
+                "DOMAIN-SUFFIX,c.com,Node B",
+                "MATCH,PANEL-SELECT",
+            ]
+        );
+
+        o.mode = TunnelMode::Tun;
+        let tun = build(PANEL, &o).expect("builds");
+        assert_eq!(rules_of(&parse(&tun))[1], "PROCESS-NAME,a.exe,DIRECT", "in the user's order");
+    }
+
+    #[test]
+    fn the_rules_page_reads_the_panels_groups_and_rules() {
+        let (groups, rules) = routing_inputs(PANEL);
+        assert_eq!(groups, vec!["PANEL-SELECT"]);
+        assert_eq!(rules, vec!["GEOSITE,category-ru,DIRECT", "MATCH,PANEL-SELECT"]);
+        let (fallback, _) = routing_inputs("proxies:\n  - {name: A, type: ss}\n");
+        assert_eq!(fallback, vec![DEFAULT_SELECTOR, DEFAULT_AUTO_GROUP]);
     }
 
     #[test]

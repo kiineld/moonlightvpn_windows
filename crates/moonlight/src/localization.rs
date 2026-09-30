@@ -35,7 +35,6 @@ strings! {
     // Navigation
     NavConnect      => "Подключение"        / "Connect",
     NavSubscription => "Подписка"           / "Subscription",
-    NavApps         => "Приложения"         / "Apps",
     NavSettings     => "Настройки"          / "Settings",
     NavLogs         => "Логи"               / "Logs",
     NavConnections  => "Подключения"        / "Connections",
@@ -98,7 +97,6 @@ strings! {
     TrafficResets   => "Трафик обновится"   / "Traffic resets",
     RefreshDone     => "Подписка обновлена" / "Subscription updated",
     RefreshFailed   => "Подписка не обновлена" / "Subscription not updated",
-    HideAnnounce    => "Скрыть"             / "Hide",
     OfTraffic       => "трафика"            / "of traffic",
 
     // Problems, worded by the app — never the service's or the core's text,
@@ -131,23 +129,7 @@ strings! {
     ConnectNow      => "Подключиться"       / "Connect",
     OpenTelegramBot => "Открыть Telegram-бот" / "Open the Telegram bot",
 
-    // Apps / split tunnelling
-    AppsSubtitle    => "Какой трафик идёт через туннель" / "Which traffic goes through the tunnel",
-    SplitAll        => "Весь трафик"        / "All traffic",
-    SplitOnly       => "Только эти"         / "Only these",
-    SplitExcept     => "Кроме этих"         / "Except these",
-    SplitNeedsTun   => "Правила по процессам работают только в режиме TUN" / "Process rules only work in TUN mode",
     SearchApps      => "Поиск"              / "Search",
-    Programs        => "ПРОГРАММЫ"          / "PROGRAMS",
-    RulesHeading    => "ПРАВИЛА"            / "RULES",
-    RunningNow      => "Запущено"           / "Running",
-    SplitAllNote    => "Через туннель идёт весь трафик компьютера." / "All traffic from this computer goes through the tunnel.",
-    SplitOnlyNote   => "Через туннель пойдут только отмеченные программы — остальные напрямую." / "Only the ticked programs go through the tunnel; the rest go direct.",
-    SplitExceptNote => "Отмеченные программы пойдут напрямую, весь остальной трафик — через туннель." / "The ticked programs go direct; all other traffic goes through the tunnel.",
-    RulesFootnote   => "Правила по доменам, адресам и портам работают в обоих режимах. PROCESS-* требуют TUN." / "Domain, address and port rules work in both modes. PROCESS-* rules need TUN.",
-    NoApps          => "Программы не найдены" / "No programs found",
-    Rules           => "Правила"            / "Rules",
-    AddRule         => "Добавить правило"   / "Add rule",
 
     // Settings
     SettingsSubtitle => "Система, приложение и поддержка" / "System, app and support",
@@ -167,8 +149,6 @@ strings! {
     LaunchAtLoginNote => "Moonlight запустится вместе с Windows" / "Moonlight starts with Windows",
     AutoUpdate      => "Автообновление подписки" / "Update the subscription automatically",
     AutoUpdateSub   => "Как часто проверять серверы, дни и трафик" / "How often to check servers, days and traffic",
-    AutoUpdateOff   => "Выкл"               / "Off",
-    HoursShort      => "ч"                  / "h",
     AutostartFailed => "Не удалось изменить автозапуск" / "Could not change the startup setting",
     MinimiseToTray  => "Свернуть в системный трей" / "Minimise to the system tray",
     MinimiseToTrayNote => "Окно закрывается в трей, туннель работает" / "Closing the window leaves the tunnel running",
@@ -214,6 +194,53 @@ strings! {
     ColHost         => "ХОСТ"               / "HOST",
     ClearLogs       => "Очистить"           / "Clear",
     FilterText      => "Фильтр"             / "Filter",
+
+    // Rules
+    NavRules        => "Правила"            / "Rules",
+    RulesSubtitle   => "Куда идёт трафик: ваши правила и правила подписки" / "Where traffic goes: your rules and the subscription's",
+    RulesMine       => "Мои правила"        / "My rules",
+    RulesProfile    => "Правила подписки"   / "Subscription rules",
+    RulesFilter     => "Фильтр по типу, значению или цели" / "Filter by type, value or target",
+    RulesAdd        => "Добавить правило"   / "Add rule",
+    RulesEdit       => "Изменить правило"   / "Edit rule",
+    RulesOwnCount   => "Своих"              / "Own",
+    RulesProfileCount => "Правил"           / "Rules",
+    ColType         => "ТИП"                / "TYPE",
+    ColValue        => "ЗНАЧЕНИЕ"           / "VALUE",
+    ColTarget       => "ЦЕЛЬ"               / "TARGET",
+    ColPriority     => "ПРИОРИТЕТ"          / "PRIORITY",
+    RuleType        => "Тип"                / "Type",
+    RuleValue       => "Значение"           / "Value",
+    RuleTarget      => "Цель"               / "Target",
+    RulePriority    => "Приоритет"          / "Priority",
+    RuleRunning     => "ЗАПУЩЕННЫЕ"         / "RUNNING",
+    RuleInstalled   => "ПРОГРАММЫ"          / "APPS",
+    TargetBuiltIn   => "ВСТРОЕННЫЕ"         / "BUILT-IN",
+    TargetGroups    => "ГРУППЫ ПОДПИСКИ"    / "SUBSCRIPTION GROUPS",
+    TargetDirect    => "Мимо VPN"           / "Bypass the VPN",
+    TargetReject    => "Блокировать соединение" / "Block the connection",
+    TargetMissing   => "Этой группы больше нет в подписке — правило пропускается" / "This group is no longer in the subscription — the rule is skipped",
+    PriorityOverride => "Override"          / "Override",
+    PriorityOverrideSub => "Применяется до правил подписки" / "Applied before the subscription's rules",
+    PriorityExtend  => "Extend"             / "Extend",
+    PriorityExtendSub => "Применяется после правил подписки" / "Applied after the subscription's rules",
+    RuleTunOnly     => "Работает только в режиме TUN" / "Works in TUN mode only",
+    RulesUnsaved    => "Изменения не применены" / "Changes not applied",
+    RulesReset      => "Сбросить"           / "Reset",
+    RulesApply      => "Применить"          / "Apply",
+    RulesApplying   => "Применяются…"       / "Applying…",
+    RulesEmpty      => "Своих правил пока нет" / "No rules of your own yet",
+    RulesEmptyHint  => "Пустите сайт мимо VPN, заблокируйте его или направьте через группу. Свои правила переживают обновление подписки." / "Send a site around the VPN, block it or route it through a group. Your rules survive subscription updates.",
+    RulesProfileEmpty => "В подписке нет правил" / "The subscription has no rules",
+    RulesModeNote   => "Правила действуют в режиме «По правилам» — сейчас выбран другой" / "Rules apply in Rule mode — another mode is selected",
+    InvalidEmpty    => "Укажите значение"   / "Enter a value",
+    InvalidComma    => "В значении не может быть запятой" / "The value cannot contain a comma",
+    InvalidRegex    => "Это не регулярное выражение" / "Not a regular expression",
+    InvalidPort     => "Порт от 1 до 65535, диапазон через «-» или несколько через «/»" / "A port from 1 to 65535, a range with “-” or several joined by “/”",
+    InvalidCidr     => "Нужна подсеть, например 192.168.1.0/24" / "A subnet, e.g. 192.168.1.0/24",
+    InvalidAsn      => "Только номер AS, например 13335" / "The AS number alone, e.g. 13335",
+    InvalidNetwork  => "tcp или udp"        / "tcp or udp",
+    IssueRulesRefused => "Ядро не приняло эти правила — подробности в логах" / "The core rejected these rules — the log has the details",
 
     // Tray panel
     TrayStateOn     => "Подключено"         / "Connected",
@@ -295,7 +322,25 @@ pub fn issue(issue: &Issue, locale: AppLocale) -> String {
         Issue::RoutesTaken => s(S::IssueRoutesTaken),
         Issue::TunFailed => s(S::IssueTunFailed),
         Issue::HelperMissing => s(S::IssueHelperMissing),
+        Issue::RulesRefused => s(S::IssueRulesRefused),
     }
+}
+
+/// Why a rule's value will not do, in the app's words.
+pub fn invalid(invalid: &moonlight_core::rules::Invalid, locale: AppLocale) -> &'static str {
+    use moonlight_core::rules::Invalid;
+    t(
+        match invalid {
+            Invalid::Empty => S::InvalidEmpty,
+            Invalid::ContainsComma => S::InvalidComma,
+            Invalid::BadRegex(_) => S::InvalidRegex,
+            Invalid::BadPort => S::InvalidPort,
+            Invalid::BadCidr => S::InvalidCidr,
+            Invalid::BadAsn => S::InvalidAsn,
+            Invalid::BadNetwork => S::InvalidNetwork,
+        },
+        locale,
+    )
 }
 
 #[cfg(test)]
@@ -327,6 +372,10 @@ mod tests {
             S::ImportPlaceholder,
             // A machine name, not a word.
             S::ThisDevice,
+            // Flowvy's own terms for a rule's place, which the macOS client
+            // keeps in Russian too.
+            S::PriorityOverride,
+            S::PriorityExtend,
         ];
 
         for string in ALL {

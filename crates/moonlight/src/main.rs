@@ -23,10 +23,10 @@ use iced::{Element, Length, Subscription, Task};
 use moonlight_core::api::Connection;
 use moonlight_core::controller::{Command, Controller, Event, LogEntry};
 use moonlight_core::preferences::Preferences;
-use moonlight_core::split_rule::{self, Kind, SplitRule};
+use moonlight_core::rules::{self, Kind, Priority, RoutingRule};
 use moonlight_core::subscription::Source;
 use moonlight_core::{
-    AppEntry, AppLocale, ConnectionState, Issue, Node, SplitMode, SubscriptionInfo, TunnelMode,
+    AppEntry, AppLocale, ConnectionState, Issue, Node, SubscriptionInfo, TunnelMode,
 };
 use moonlight_design::motion::{self, dur, Curve};
 use moonlight_design::{Appearance, Palette};
@@ -131,7 +131,7 @@ fn main() -> iced::Result {
 pub enum Page {
     Connect,
     Subscription,
-    Apps,
+    Rules,
     Settings,
     Import,
     Logs,
@@ -146,7 +146,7 @@ impl Page {
     pub const SIDEBAR: [Page; 5] = [
         Page::Connect,
         Page::Subscription,
-        Page::Apps,
+        Page::Rules,
         Page::Connections,
         Page::Settings,
     ];
@@ -155,7 +155,7 @@ impl Page {
         match self {
             Page::Connect => S::NavConnect,
             Page::Subscription => S::NavSubscription,
-            Page::Apps => S::NavApps,
+            Page::Rules => S::NavRules,
             Page::Settings => S::NavSettings,
             Page::Import => S::ImportTitle,
             Page::Logs => S::NavLogs,
@@ -167,7 +167,7 @@ impl Page {
         match self {
             Page::Connect => S::ConnectSubtitle,
             Page::Subscription => S::SubscriptionSubtitle,
-            Page::Apps => S::AppsSubtitle,
+            Page::Rules => S::RulesSubtitle,
             Page::Settings => S::SettingsSubtitle,
             Page::Import => S::ImportSubtitle,
             Page::Logs => S::LogsSubtitle,
@@ -180,7 +180,7 @@ impl Page {
         match self {
             Page::Connect => Icon::Power,
             Page::Subscription => Icon::Sparkles,
-            Page::Apps => Icon::Layers,
+            Page::Rules => Icon::Route,
             Page::Settings => Icon::Settings,
             Page::Import => Icon::Plus,
             Page::Logs => Icon::CircleAlert,
@@ -199,6 +199,45 @@ impl Page {
             Page::Logs => Page::Settings,
             other => other,
         }
+    }
+}
+
+/// Which list the rules page shows.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RulesTab {
+    Mine,
+    Subscription,
+}
+
+/// The rule being added or changed.
+#[derive(Debug, Clone, PartialEq)]
+pub struct RuleEditor {
+    /// The rule being changed, or `None` for a new one.
+    pub editing: Option<uuid::Uuid>,
+    pub kind: Kind,
+    pub value: String,
+    pub target: String,
+    pub priority: Priority,
+    pub error: Option<rules::Invalid>,
+    /// The program list for a process rule is open.
+    pub picker: bool,
+    pub picker_filter: String,
+}
+
+/// A rule being dragged into a new place.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Drag {
+    pub from: usize,
+    /// Where the pointer was when the drag began, once it has first moved.
+    pub origin: Option<f32>,
+    pub offset: f32,
+}
+
+impl Drag {
+    /// The place the lifted rule would land in a list of `len`.
+    fn to(&self, len: usize) -> usize {
+        let moved = (self.offset / screens::rules::ROW_HEIGHT).round() as isize;
+        (self.from as isize + moved).clamp(0, len.saturating_sub(1) as isize) as usize
     }
 }
 
@@ -275,14 +314,28 @@ pub enum Message {
     RemoveSubscription,
 
     SetMode(TunnelMode),
-    SetSplitMode(SplitMode),
-    ToggleApp(String),
-    ToggleRule(uuid::Uuid),
-    DeleteRule(uuid::Uuid),
-    RuleKindChanged(Kind),
-    RuleValueChanged(String),
-    RuleSubmit,
-    AppSearchChanged(String),
+    RulesTab(RulesTab),
+    RulesFilter(String),
+    RuleNew,
+    RuleEdit(uuid::Uuid),
+    RuleToggle(uuid::Uuid),
+    RuleDelete(uuid::Uuid),
+    RulesApply,
+    RulesReset,
+    EditorKind(Kind),
+    EditorValue(String),
+    EditorTarget(String),
+    EditorPriority(Priority),
+    EditorPicker,
+    EditorPickerFilter(String),
+    EditorPickApp(String),
+    EditorSave,
+    EditorCancel,
+    /// A rule's grip was pressed.
+    DragStart(usize),
+    /// The pointer is at this height while a rule is lifted.
+    DragMove(f32),
+    DragEnd,
     AppsScanned(Vec<AppEntry>),
     /// Executable → its own icon, decoded off the UI thread.
     IconsLoaded(Vec<(String, moonlight_core::app_icon::Rgba)>),
@@ -364,10 +417,17 @@ pub struct Moonlight {
     /// and the split rules are.
     app_icons: std::collections::HashMap<String, iced::widget::image::Handle>,
     running: Vec<String>,
-    app_search: String,
-    rule_kind: Kind,
-    rule_value: String,
-    rule_error: Option<String>,
+    /// The user's rules as the rules page has them: a draft until Apply.
+    rules_draft: Vec<RoutingRule>,
+    rules_tab: RulesTab,
+    rules_filter: String,
+    rule_editor: Option<RuleEditor>,
+    rule_drag: Option<Drag>,
+    /// The subscription's groups, which a rule can target, and its own rules.
+    routing_groups: Vec<String>,
+    profile_rules: Vec<String>,
+    rules_applying: bool,
+    rules_issue: Option<String>,
 
     import_field: String,
     /// A subscription is being fetched from the Import screen, and the screen is
@@ -512,6 +572,7 @@ impl Moonlight {
     /// it both leaks state between runs and edits the user's own settings.
     fn with_preferences(preferences: Preferences) -> Self {
         let sidebar_collapsed = preferences.sidebar_collapsed;
+        let rules_draft = preferences.routing_rules.clone();
         Moonlight {
             page: Page::Connect,
             preferences,
@@ -533,10 +594,15 @@ impl Moonlight {
             apps: Vec::new(),
             app_icons: std::collections::HashMap::new(),
             running: Vec::new(),
-            app_search: String::new(),
-            rule_kind: Kind::DomainSuffix,
-            rule_value: String::new(),
-            rule_error: None,
+            rules_draft,
+            rules_tab: RulesTab::Mine,
+            rules_filter: String::new(),
+            rule_editor: None,
+            rule_drag: None,
+            routing_groups: Vec::new(),
+            profile_rules: Vec::new(),
+            rules_applying: false,
+            rules_issue: None,
             import_field: String::new(),
             importing: false,
             import_done: false,
@@ -811,54 +877,141 @@ impl Moonlight {
                 self.save();
                 send(Command::SetMode(mode));
             }
-            Message::SetSplitMode(mode) => {
-                self.preferences.split_mode = mode;
-                self.save();
-                send(Command::SetSplitMode(mode));
+            Message::RulesTab(tab) => self.rules_tab = tab,
+            Message::RulesFilter(value) => self.rules_filter = value,
+            Message::RuleNew => {
+                self.rule_editor = Some(RuleEditor {
+                    editing: None,
+                    kind: Kind::DomainSuffix,
+                    value: String::new(),
+                    target: rules::DIRECT.to_string(),
+                    priority: Priority::Override,
+                    error: None,
+                    picker: false,
+                    picker_filter: String::new(),
+                });
             }
-            Message::ToggleApp(executable) => {
-                self.preferences.toggle_app(&executable);
-                self.save();
-                send(Command::SetSplitRules(self.preferences.split_rules.clone()));
+            Message::RuleEdit(id) => {
+                if let Some(rule) = self.rules_draft.iter().find(|r| r.id == id) {
+                    self.rule_editor = Some(RuleEditor {
+                        editing: Some(id),
+                        kind: rule.kind,
+                        value: rule.value.clone(),
+                        target: rule.target.clone(),
+                        priority: rule.priority,
+                        error: None,
+                        picker: false,
+                        picker_filter: String::new(),
+                    });
+                }
             }
-            Message::ToggleRule(id) => {
-                if let Some(rule) = self.preferences.split_rules.iter_mut().find(|r| r.id == id) {
+            Message::RuleToggle(id) => {
+                if let Some(rule) = self.rules_draft.iter_mut().find(|r| r.id == id) {
                     rule.enabled = !rule.enabled;
                 }
-                self.save();
-                send(Command::SetSplitRules(self.preferences.split_rules.clone()));
             }
-            Message::DeleteRule(id) => {
-                self.preferences.split_rules.retain(|r| r.id != id);
-                self.save();
-                send(Command::SetSplitRules(self.preferences.split_rules.clone()));
+            Message::RuleDelete(id) => self.rules_draft.retain(|r| r.id != id),
+            Message::RulesReset => {
+                self.rules_draft = self.preferences.routing_rules.clone();
+                self.rules_issue = None;
             }
-            Message::RuleKindChanged(kind) => {
-                self.rule_kind = kind;
-                self.rule_error = None;
+            Message::RulesApply => {
+                self.rules_applying = true;
+                self.rules_issue = None;
+                send(Command::ApplyRules(self.rules_draft.clone()));
             }
-            Message::RuleValueChanged(value) => {
-                self.rule_value = value;
-                self.rule_error = None;
+            Message::EditorKind(kind) => {
+                if let Some(editor) = &mut self.rule_editor {
+                    editor.kind = kind;
+                    editor.error = None;
+                    editor.picker &= kind.needs_process_matching();
+                }
             }
-            Message::RuleSubmit => {
-                // Validated before it can be added, because a bad rule does not
-                // fail alone: the core refuses the whole config, so the tunnel
-                // stops rather than the rule being skipped.
-                match split_rule::validate(self.rule_kind, &self.rule_value) {
-                    Some(invalid) => self.rule_error = Some(invalid.to_string()),
-                    None => {
-                        self.preferences
-                            .split_rules
-                            .push(SplitRule::new(self.rule_kind, self.rule_value.trim()));
-                        self.rule_value.clear();
-                        self.rule_error = None;
-                        self.save();
-                        send(Command::SetSplitRules(self.preferences.split_rules.clone()));
+            Message::EditorValue(value) => {
+                if let Some(editor) = &mut self.rule_editor {
+                    editor.value = value;
+                    editor.error = None;
+                }
+            }
+            Message::EditorTarget(target) => {
+                if let Some(editor) = &mut self.rule_editor {
+                    editor.target = target;
+                }
+            }
+            Message::EditorPriority(priority) => {
+                if let Some(editor) = &mut self.rule_editor {
+                    editor.priority = priority;
+                }
+            }
+            Message::EditorPicker => {
+                if let Some(editor) = &mut self.rule_editor {
+                    editor.picker = !editor.picker;
+                    if editor.picker {
+                        return Task::perform(scan_running(), Message::RunningScanned);
                     }
                 }
             }
-            Message::AppSearchChanged(value) => self.app_search = value,
+            Message::EditorPickerFilter(value) => {
+                if let Some(editor) = &mut self.rule_editor {
+                    editor.picker_filter = value;
+                }
+            }
+            Message::EditorPickApp(value) => {
+                if let Some(editor) = &mut self.rule_editor {
+                    editor.value = value;
+                    editor.error = None;
+                    editor.picker = false;
+                }
+            }
+            Message::EditorCancel => self.rule_editor = None,
+            Message::EditorSave => {
+                // Checked before it is kept, against the grammar the core
+                // applies: one bad rule and the core refuses the whole config.
+                if let Some(editor) = &mut self.rule_editor {
+                    if let Some(invalid) = rules::validate(editor.kind, &editor.value) {
+                        editor.error = Some(invalid);
+                        return Task::none();
+                    }
+                    let rule = RoutingRule {
+                        id: editor.editing.unwrap_or_else(uuid::Uuid::new_v4),
+                        kind: editor.kind,
+                        value: editor.value.trim().to_string(),
+                        target: editor.target.clone(),
+                        priority: editor.priority,
+                        enabled: true,
+                    };
+                    match self.rules_draft.iter_mut().find(|r| Some(r.id) == editor.editing) {
+                        Some(existing) => {
+                            let enabled = existing.enabled;
+                            *existing = RoutingRule { enabled, ..rule };
+                        }
+                        None => self.rules_draft.push(rule),
+                    }
+                    self.rule_editor = None;
+                }
+            }
+            Message::DragStart(index) => {
+                self.rule_drag = Some(Drag {
+                    from: index,
+                    origin: None,
+                    offset: 0.0,
+                });
+            }
+            Message::DragMove(y) => {
+                if let Some(drag) = &mut self.rule_drag {
+                    let origin = *drag.origin.get_or_insert(y);
+                    drag.offset = y - origin;
+                }
+            }
+            Message::DragEnd => {
+                if let Some(drag) = self.rule_drag.take() {
+                    let to = drag.to(self.rules_draft.len());
+                    if to != drag.from && drag.from < self.rules_draft.len() {
+                        let rule = self.rules_draft.remove(drag.from);
+                        self.rules_draft.insert(to, rule);
+                    }
+                }
+            }
             Message::AppsScanned(apps) => {
                 let executables: Vec<(String, String)> = apps
                     .iter()
@@ -1087,9 +1240,6 @@ impl Moonlight {
                 if self.page == Page::Connections {
                     send(Command::RefreshConnections);
                 }
-                if self.page == Page::Apps {
-                    return Task::perform(scan_running(), Message::RunningScanned);
-                }
             }
         }
         Task::none()
@@ -1196,6 +1346,16 @@ impl Moonlight {
                     );
                 }
             }
+            Event::RoutingInputs { groups, rules } => {
+                self.routing_groups = groups;
+                self.profile_rules = rules;
+            }
+            Event::RulesApplied(outcome) => {
+                self.rules_applying = false;
+                self.rules_issue = outcome
+                    .err()
+                    .map(|issue| localization::issue(&issue, self.locale()));
+            }
             Event::ShutdownComplete => {
                 moonlight_core::tray::remove();
                 return iced::exit();
@@ -1205,6 +1365,9 @@ impl Moonlight {
                 // latencies, the proxy snapshot — so its copy wins for those,
                 // while the view settings the UI edits are already correct here
                 // and must not be undone by a report that crossed with them.
+                // A draft nobody has touched follows what was applied — the
+                // carry-over from the apps screen lands here, and so does Apply.
+                let clean = self.rules_draft == self.preferences.routing_rules;
                 let sidebar = self.preferences.sidebar_collapsed;
                 let appearance = self.preferences.appearance.clone();
                 let locale = self.preferences.locale;
@@ -1216,6 +1379,9 @@ impl Moonlight {
                 self.preferences.appearance = appearance;
                 self.preferences.locale = locale;
                 self.preferences.dismissed_announce = dismissed;
+                if clean {
+                    self.rules_draft = self.preferences.routing_rules.clone();
+                }
                 self.preferences.notifications = notifications;
                 self.preferences.sent_alerts = sent_alerts;
             }
@@ -1392,6 +1558,10 @@ impl Moonlight {
             // tick fires at once, which is the catch-up a wake handler would do.
             iced::time::every(Duration::from_secs(300)).map(|_| Message::AutoUpdateTick),
         ];
+        // While a rule is lifted, the pointer anywhere in the window moves it.
+        if self.rule_drag.is_some() {
+            subscriptions.push(iced::event::listen_with(drag_events));
+        }
 
         // An entrance or a rail glide needs frames regardless of what the
         // tunnel is doing, and both are short.
@@ -1435,7 +1605,7 @@ impl Moonlight {
         let body = match self.page {
             Page::Connect => screens::connect::view(self),
             Page::Subscription => screens::subscription::view(self),
-            Page::Apps => screens::apps::view(self),
+            Page::Rules => screens::rules::view(self),
             Page::Settings => screens::settings::view(self),
             Page::Import => screens::import::view(self),
             Page::Logs => screens::logs::view(self),
@@ -1535,10 +1705,26 @@ impl Moonlight {
         // has no non-client area for Windows to hit-test, so the app owns its
         // own borders.
         let framed = screens::resize::frame(window.into());
-        match &self.link_prompt {
-            Some(prompt) => iced::widget::stack![framed, screens::link::view(self, prompt)].into(),
-            None => framed,
+        match (&self.link_prompt, &self.rule_editor) {
+            (Some(prompt), _) => iced::widget::stack![framed, screens::link::view(self, prompt)].into(),
+            (None, Some(editor)) => {
+                iced::widget::stack![framed, screens::rule_editor::view(self, editor)].into()
+            }
+            (None, None) => framed,
         }
+    }
+}
+
+fn drag_events(
+    event: iced::Event,
+    _status: iced::event::Status,
+    _window: iced::window::Id,
+) -> Option<Message> {
+    use iced::mouse;
+    match event {
+        iced::Event::Mouse(mouse::Event::CursorMoved { position }) => Some(Message::DragMove(position.y)),
+        iced::Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left)) => Some(Message::DragEnd),
+        _ => None,
     }
 }
 
@@ -1895,7 +2081,6 @@ impl Cadence {
             // These two poll for their own content, so they tick even when the
             // tunnel is down.
             || page == Page::Connections
-            || page == Page::Apps
         {
             Cadence::Second
         } else {
@@ -2042,17 +2227,49 @@ impl Moonlight {
             .iter()
             .any(|r| r.eq_ignore_ascii_case(executable))
     }
-    pub fn app_search(&self) -> &str {
-        &self.app_search
+    pub fn running(&self) -> &[String] {
+        &self.running
     }
-    pub fn rule_kind(&self) -> Kind {
-        self.rule_kind
+    pub fn rules_draft(&self) -> &[RoutingRule] {
+        &self.rules_draft
     }
-    pub fn rule_value(&self) -> &str {
-        &self.rule_value
+    /// The draft in the order it would have if the rule being dragged were
+    /// dropped where the pointer is now.
+    pub fn rules_in_order(&self) -> Vec<&RoutingRule> {
+        let mut rules: Vec<&RoutingRule> = self.rules_draft.iter().collect();
+        if let Some(drag) = self.rule_drag {
+            if drag.from < rules.len() {
+                let to = drag.to(rules.len());
+                let lifted = rules.remove(drag.from);
+                rules.insert(to, lifted);
+            }
+        }
+        rules
     }
-    pub fn rule_error(&self) -> Option<&str> {
-        self.rule_error.as_deref()
+    pub fn dragging_rule(&self) -> Option<uuid::Uuid> {
+        let drag = self.rule_drag?;
+        self.rules_draft.get(drag.from).map(|r| r.id)
+    }
+    pub fn rules_tab(&self) -> RulesTab {
+        self.rules_tab
+    }
+    pub fn rules_filter(&self) -> &str {
+        &self.rules_filter
+    }
+    pub fn rules_dirty(&self) -> bool {
+        self.rules_draft != self.preferences.routing_rules
+    }
+    pub fn rules_applying(&self) -> bool {
+        self.rules_applying
+    }
+    pub fn rules_issue(&self) -> Option<&str> {
+        self.rules_issue.as_deref()
+    }
+    pub fn routing_groups(&self) -> &[String] {
+        &self.routing_groups
+    }
+    pub fn profile_rules(&self) -> &[String] {
+        &self.profile_rules
     }
     pub fn is_importing(&self) -> bool {
         self.importing
@@ -2198,7 +2415,7 @@ mod tests {
         for page in [
             Page::Connect,
             Page::Subscription,
-            Page::Apps,
+            Page::Rules,
             Page::Settings,
             Page::Import,
             Page::Logs,
@@ -2215,7 +2432,7 @@ mod tests {
         assert_eq!(Page::SIDEBAR, [
             Page::Connect,
             Page::Subscription,
-            Page::Apps,
+            Page::Rules,
             Page::Connections,
             Page::Settings,
         ]);
@@ -2344,30 +2561,50 @@ mod tests {
     }
 
     #[test]
-    fn a_bad_rule_is_refused_with_its_reason_rather_than_added() {
+    fn a_bad_rule_is_refused_with_its_reason_and_the_editor_stays_open() {
         // The core refuses the whole config for one bad rule, so the tunnel
         // stops rather than the rule being skipped.
         let mut app = app();
-        app.rule_kind = Kind::IpCidr;
-        app.rule_value = "999.1.1.1/24".into();
-        let _ = app.update(Message::RuleSubmit);
-
-        assert!(app.preferences.split_rules.is_empty());
-        assert!(app.rule_error().is_some());
-        // And the value is kept, so the user can correct it rather than retype.
-        assert_eq!(app.rule_value(), "999.1.1.1/24");
+        let _ = app.update(Message::RuleNew);
+        let _ = app.update(Message::EditorKind(Kind::IpCidr));
+        let _ = app.update(Message::EditorValue("999.1.1.1/24".into()));
+        let _ = app.update(Message::EditorSave);
+        assert!(app.rules_draft.is_empty());
+        let editor = app.rule_editor.as_ref().expect("still open");
+        assert_eq!(editor.error, Some(rules::Invalid::BadCidr));
+        // The value is kept, so it can be corrected rather than retyped.
+        assert_eq!(editor.value, "999.1.1.1/24");
     }
 
     #[test]
-    fn a_good_rule_is_added_and_the_field_cleared() {
+    fn a_rule_is_a_draft_until_applied() {
         let mut app = app();
-        app.rule_kind = Kind::DomainSuffix;
-        app.rule_value = "openai.com".into();
-        let _ = app.update(Message::RuleSubmit);
+        let _ = app.update(Message::RuleNew);
+        let _ = app.update(Message::EditorValue("openai.com".into()));
+        let _ = app.update(Message::EditorSave);
+        assert_eq!(app.rules_draft.len(), 1);
+        assert!(app.rule_editor.is_none());
+        assert!(app.rules_dirty(), "added, not applied");
+        let _ = app.update(Message::RulesReset);
+        assert!(app.rules_draft.is_empty() && !app.rules_dirty());
+    }
 
-        assert_eq!(app.preferences.split_rules.len(), 1);
-        assert_eq!(app.rule_value(), "");
-        assert!(app.rule_error().is_none());
+    #[test]
+    fn a_dragged_rule_lands_where_it_was_dropped() {
+        let mut app = app();
+        for value in ["a.com", "b.com", "c.com"] {
+            app.rules_draft.push(RoutingRule::new(Kind::Domain, value, rules::DIRECT, Priority::Override));
+        }
+        let _ = app.update(Message::DragStart(0));
+        let _ = app.update(Message::DragMove(100.0));
+        // Two rows down.
+        let _ = app.update(Message::DragMove(100.0 + 2.0 * screens::rules::ROW_HEIGHT));
+        let preview: Vec<&str> = app.rules_in_order().iter().map(|r| r.value.as_str()).collect();
+        assert_eq!(preview, ["b.com", "c.com", "a.com"], "the list shows where it will land");
+        let _ = app.update(Message::DragEnd);
+        let order: Vec<&str> = app.rules_draft.iter().map(|r| r.value.as_str()).collect();
+        assert_eq!(order, ["b.com", "c.com", "a.com"]);
+        assert!(app.rule_drag.is_none());
     }
 
     #[test]
@@ -2430,12 +2667,10 @@ mod tests {
     #[test]
     fn the_polling_screens_tick_even_when_the_tunnel_is_down() {
         // They poll for their own content, not for the tunnel's.
-        for page in [Page::Connections, Page::Apps] {
-            assert_eq!(
-                Cadence::for_state(&ConnectionState::Disconnected, page),
-                Cadence::Second
-            );
-        }
+        assert_eq!(
+            Cadence::for_state(&ConnectionState::Disconnected, Page::Connections),
+            Cadence::Second
+        );
     }
 
     #[test]
@@ -2487,8 +2722,13 @@ mod tests {
                     path: r"C:\chrome.exe".into(),
                 }];
                 app.running = vec!["chrome.exe".into()];
-                app.preferences.split_rules =
-                    vec![SplitRule::new(Kind::DomainSuffix, "openai.com")];
+                app.rules_draft = vec![RoutingRule::new(
+                    Kind::DomainSuffix,
+                    "openai.com",
+                    "Gone group",
+                    Priority::Extend,
+                )];
+                app.profile_rules = vec!["AND,((DOMAIN,x),(NETWORK,udp)),P".into(), "MATCH,P".into()];
                 app.logs = vec![LogEntry::app("ERROR", "boom")];
                 app.connections = vec![Connection {
                     id: "1".into(),
@@ -2510,7 +2750,7 @@ mod tests {
             for page in [
                 Page::Connect,
                 Page::Subscription,
-                Page::Apps,
+                Page::Rules,
                 Page::Settings,
                 Page::Import,
                 Page::Logs,
@@ -2534,7 +2774,7 @@ mod tests {
         for page in [
             Page::Connect,
             Page::Subscription,
-            Page::Apps,
+            Page::Rules,
             Page::Settings,
             Page::Import,
             Page::Logs,

@@ -37,6 +37,9 @@ pub enum Issue {
     TunFailed,
     /// TUN needs the helper service and it is missing or not answering.
     HelperMissing,
+    /// The core would not take the config the user's rules make, so nothing
+    /// was changed.
+    RulesRefused,
 }
 
 impl From<&Failure> for Issue {

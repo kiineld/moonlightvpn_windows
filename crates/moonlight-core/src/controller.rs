@@ -40,7 +40,7 @@ use crate::models::{ConnectionState, Node, RoutingMode, SplitMode, SubscriptionI
 use crate::preferences::{self, Preferences};
 use crate::process::MihomoProcess;
 use crate::redact::{self, Redactions};
-use crate::split_rule::SplitRule;
+use crate::rules::{self, RoutingRule};
 use crate::subscription::{self, DeviceIdentity, Source, SubscriptionClient};
 use crate::system_proxy;
 use crate::{mihomo_config, share_link};
@@ -80,8 +80,9 @@ pub enum Command {
     ImportSubscription(String),
     RemoveSubscription,
     SetMode(TunnelMode),
-    SetSplitMode(SplitMode),
-    SetSplitRules(Vec<SplitRule>),
+    /// The user's rules, as the rules page's draft has them. Kept only if the
+    /// core takes the config they make.
+    ApplyRules(Vec<RoutingRule>),
     CloseConnection(String),
     CloseAllConnections,
     RefreshConnections,
@@ -121,6 +122,11 @@ pub enum Event {
     /// A subscription fetch finished — asked for, imported or scheduled — and
     /// whether it worked. The connect page says so at its foot.
     Refreshed(Result<(), Issue>),
+    /// What the rules page offers and shows: the subscription's groups, which
+    /// a rule can target, and its own rules.
+    RoutingInputs { groups: Vec<String>, rules: Vec<String> },
+    /// The user's rules were applied, or refused and left as they were.
+    RulesApplied(Result<(), Issue>),
     /// Everything that had to be put back has been: the proxy settings are
     /// restored and the core — this app's or the helper's — is stopped. The UI
     /// waits for this before closing its window, because closing first races
@@ -303,16 +309,7 @@ impl Controller {
                 Command::ImportSubscription(url) => self.import(url).await,
                 Command::RemoveSubscription => self.remove_subscription().await,
                 Command::SetMode(mode) => self.set_mode(mode).await,
-                Command::SetSplitMode(mode) => {
-                    self.preferences.split_mode = mode;
-                    self.save();
-                    self.reload_config().await;
-                }
-                Command::SetSplitRules(rules) => {
-                    self.preferences.split_rules = rules;
-                    self.save();
-                    self.reload_config().await;
-                }
+                Command::ApplyRules(rules) => self.apply_rules(rules).await,
                 Command::CloseConnection(id) => {
                     let _ = self.api.close_connection(&id).await;
                     self.refresh_connections().await;
@@ -513,6 +510,11 @@ impl Controller {
     /// mode or loading a refreshed subscription all go through a reload, so the
     /// tunnel survives every one of them.
     async fn restart_core(&mut self) {
+        self.carry_over_apps_screen();
+        if let Some(panel) = self.panel_yaml.as_deref() {
+            let (groups, rules) = mihomo_config::routing_inputs(panel);
+            self.emit(Event::RoutingInputs { groups, rules });
+        }
         let Some(config) = self.build_config() else {
             return;
         };
@@ -559,7 +561,7 @@ impl Controller {
         if !crate::geodata::present(&directory) {
             self.narrate("INFO", "Downloading geo databases (one time, ~15 MB)");
         }
-        if let Err(error) = crate::geodata::ensure(&directory).await {
+        if let Err(error) = self.ensure_geodata(&directory, &self.preferences.routing_rules).await {
             return self.fail(
                 Issue::CoreFailed,
                 format!("Could not download the geo databases. {error}"),
@@ -627,8 +629,7 @@ impl Controller {
             } else {
                 TunnelMode::SystemProxy
             },
-            split_mode: self.preferences.split_mode,
-            split_rules: self.active_split_rules(),
+            routing_rules: self.preferences.routing_rules.clone(),
             log_level: "info".to_string(),
             routing_mode: self.preferences.routing_mode,
         };
@@ -639,20 +640,6 @@ impl Controller {
                 None
             }
         }
-    }
-
-    /// `PROCESS-*` rules need the core to identify the process behind a
-    /// connection, which only TUN can do — under a system proxy the core is
-    /// handed a socket with no process behind it. They are dropped here rather
-    /// than written and silently never matched.
-    fn active_split_rules(&self) -> Vec<SplitRule> {
-        let tun = self.preferences.mode == TunnelMode::Tun;
-        self.preferences
-            .split_rules
-            .iter()
-            .filter(|rule| tun || !rule.kind.needs_process_matching())
-            .cloned()
-            .collect()
     }
 
     async fn load_nodes(&mut self) {
@@ -1081,6 +1068,101 @@ impl Controller {
         self.save();
         self.pinging = false;
         self.emit(Event::PingFinished);
+    }
+
+    /// Moves what the apps screen of earlier versions set into the user's own
+    /// rules, once: "all but these" as rules to DIRECT, "only these" as rules
+    /// to the group the subscription routes through, "all traffic" switched
+    /// off. The old settings are then forgotten, so they cannot route traffic
+    /// with no screen left to show them.
+    fn carry_over_apps_screen(&mut self) {
+        if self.preferences.split_rules.is_empty() && self.preferences.split_mode == SplitMode::All {
+            return;
+        }
+        let Some(panel) = self.panel_yaml.as_deref() else {
+            return;
+        };
+        let (_, subscription_rules) = mihomo_config::routing_inputs(panel);
+        let groups: Vec<serde_yaml::Value> = serde_yaml::from_str::<serde_yaml::Value>(panel)
+            .ok()
+            .and_then(|root| root.get("proxy-groups")?.as_sequence().cloned())
+            .unwrap_or_default();
+        let group = mihomo_config::primary_selector_name(&groups, &subscription_rules);
+        let carried = rules::carried_over(
+            &self.preferences.split_rules,
+            self.preferences.split_mode,
+            &group,
+        );
+        self.narrate(
+            "INFO",
+            format!("Carried {} rules over from the apps screen", carried.len()),
+        );
+        self.preferences.routing_rules.extend(carried);
+        self.preferences.split_rules.clear();
+        self.preferences.split_mode = SplitMode::All;
+        self.save();
+    }
+
+    /// The geo databases a config needs before the core parses it — the ASN one
+    /// only when an `IP-ASN` rule is in use.
+    async fn ensure_geodata(
+        &self,
+        directory: &std::path::Path,
+        rules: &[RoutingRule],
+    ) -> Result<bool, String> {
+        let downloaded = crate::geodata::ensure(directory).await?;
+        if rules.iter().any(|r| r.enabled && r.kind == rules::Kind::IpAsn) {
+            crate::geodata::ensure_asn(directory).await?;
+        }
+        Ok(downloaded)
+    }
+
+    /// Keeps `rules` only if the core takes the config they make: a rule the
+    /// core refuses does not fail alone — the whole config goes, and with it
+    /// the tunnel. Checked as TUN, so process rules are checked too.
+    async fn apply_rules(&mut self, rules: Vec<RoutingRule>) {
+        if let Some(panel) = self.panel_yaml.clone() {
+            let overrides = mihomo_config::Overrides {
+                controller_port: self.preferences.controller_port,
+                secret: self.preferences.api_secret.clone(),
+                mixed_port: self.preferences.mixed_port,
+                mode: TunnelMode::Tun,
+                routing_rules: rules.clone(),
+                log_level: "info".to_string(),
+                routing_mode: self.preferences.routing_mode,
+            };
+            let checked = match mihomo_config::build(&panel, &overrides) {
+                Err(error) => Err(error.to_string()),
+                Ok(config) => {
+                    let directory = preferences::core_data_directory();
+                    if let Err(error) = self.ensure_geodata(&directory, &rules).await {
+                        self.narrate("WARNING", format!("Could not fetch a geo database: {error}"));
+                    }
+                    let path = directory.join("rules-check.yaml");
+                    match std::fs::write(&path, config) {
+                        Err(error) => Err(error.to_string()),
+                        Ok(()) => {
+                            let verdict = self.core.lock().await.check(&path).await;
+                            let _ = std::fs::remove_file(&path);
+                            verdict
+                        }
+                    }
+                }
+            };
+            if let Err(why) = checked {
+                self.narrate("WARNING", format!("The core refused the rules: {why}"));
+                self.emit(Event::RulesApplied(Err(Issue::RulesRefused)));
+                return;
+            }
+        }
+        self.preferences.routing_rules = rules;
+        self.save();
+        self.narrate(
+            "INFO",
+            format!("Rules applied ({})", self.preferences.routing_rules.len()),
+        );
+        self.reload_config().await;
+        self.emit(Event::RulesApplied(Ok(())));
     }
 
     /// Measures one node, as the tray's per-row button asks.

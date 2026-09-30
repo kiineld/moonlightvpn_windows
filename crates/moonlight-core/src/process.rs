@@ -76,6 +76,34 @@ impl MihomoProcess {
         self.log.lock().expect("log mutex").join("\n")
     }
 
+    /// Has the core read `config_path` without starting it (`mihomo -t`), and
+    /// answers with its complaint when it refuses — so a change can be tried
+    /// before the running core is handed a config it would not take.
+    pub async fn check(&self, config_path: &Path) -> Result<(), String> {
+        let mut command = Command::new(&self.binary);
+        command
+            .arg("-t")
+            .arg("-d")
+            .arg(&self.data_directory)
+            .arg("-f")
+            .arg(config_path)
+            .kill_on_drop(true);
+        #[cfg(windows)]
+        command.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
+        let output = command.output().await.map_err(|e| e.to_string())?;
+        if output.status.success() {
+            return Ok(());
+        }
+        let said = String::from_utf8_lossy(&output.stdout);
+        Err(said
+            .lines()
+            .rev()
+            .find(|line| line.contains("level=error") || line.contains("error"))
+            .unwrap_or("the core refused the config")
+            .trim()
+            .to_string())
+    }
+
     /// Starts the core against `config_path` and streams its output into the
     /// bounded log. `lines` receives every line as it arrives, for the logs
     /// screen.

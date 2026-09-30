@@ -249,7 +249,7 @@ fn stage_core() -> Result<(), Box<dyn std::error::Error>> {
     // the app keeps its own copy for that.
     let core_directory = target.join("core");
     std::fs::create_dir_all(&core_directory)?;
-    for name in ["GeoSite.dat", "geoip.metadb"] {
+    for name in ["GeoSite.dat", "geoip.metadb", "ASN.mmdb"] {
         let from = source.join("geodata").join(name);
         if from.is_file() {
             std::fs::copy(&from, core_directory.join(name))?;

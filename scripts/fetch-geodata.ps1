@@ -19,7 +19,10 @@ New-Item -ItemType Directory -Force -Path resources\geodata | Out-Null
 $base = 'https://github.com/MetaCubeX/meta-rules-dat/releases/download/latest'
 $files = @(
     @{ Name = 'GeoSite.dat';   Url = "$base/geosite.dat" },
-    @{ Name = 'geoip.metadb';  Url = "$base/geoip.metadb" }
+    @{ Name = 'geoip.metadb';  Url = "$base/geoip.metadb" },
+    # For IP-ASN rules. The TUN helper's core can only use what is staged
+    # beside it, so it ships rather than being fetched when a rule needs it.
+    @{ Name = 'ASN.mmdb';      Url = "$base/GeoLite2-ASN.mmdb" }
 )
 
 foreach ($file in $files) {

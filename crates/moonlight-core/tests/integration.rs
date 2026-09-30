@@ -19,8 +19,8 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use moonlight_core::mihomo_config::{self, Overrides};
-use moonlight_core::split_rule::{Kind, SplitRule};
-use moonlight_core::{SplitMode, TunnelMode};
+use moonlight_core::rules::{self, Kind, Priority, RoutingRule};
+use moonlight_core::TunnelMode;
 
 const PANEL: &str = r#"
 proxies:
@@ -77,7 +77,7 @@ fn validate(config: &str, label: &str) -> Result<(), String> {
     // tests the grammar rather than whether this network can reach GitHub
     // through the config's resolver.
     let geodata = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../resources/geodata");
-    for name in ["GeoSite.dat", "geoip.metadb"] {
+    for name in ["GeoSite.dat", "geoip.metadb", "ASN.mmdb"] {
         let _ = std::fs::copy(geodata.join(name), directory.join(name));
     }
     let path = directory.join("config.yaml");
@@ -127,12 +127,12 @@ fn the_core_accepts_a_tun_config() {
     validate(&config, "tun").expect("the core must accept it");
 }
 
-/// Every rule kind, in **both** positions.
+/// Every rule kind, as an override and as an extension, to every kind of
+/// target — checked by the real core.
 ///
-/// This is the test the macOS client's suite exists for: mihomo accepts
-/// different grammars as a plain rule and inside a `SUB-RULE` matcher, so a rule
-/// that only works in one produces a config the core refuses — and it refuses
-/// the whole thing, so one bad kind stops the tunnel rather than being skipped.
+/// A rule the core refuses does not fail alone: it refuses the whole config,
+/// so one bad kind would stop the tunnel rather than be skipped. Built as TUN,
+/// so process rules are written too.
 #[test]
 fn every_rule_kind_is_accepted_in_both_positions() {
     if core().is_none() {
@@ -141,26 +141,21 @@ fn every_rule_kind_is_accepted_in_both_positions() {
     }
 
     for kind in Kind::ALL {
-        let rule = SplitRule::new(*kind, kind.placeholder());
-
-        // Position one: a plain rule, which is what "except these" writes.
-        let mut except = overrides();
-        except.mode = TunnelMode::Tun; // so PROCESS-* rules are not filtered out
-        except.split_mode = SplitMode::Except;
-        except.split_rules = vec![rule.clone()];
-        let config = mihomo_config::build(PANEL, &except).expect("builds");
-        validate(&config, &format!("except-{}", kind.token().to_lowercase()))
-            .unwrap_or_else(|why| panic!("{} as a plain rule: {why}", kind.token()));
-
-        // Position two: inside a SUB-RULE matcher, which is what "only these"
-        // writes.
-        let mut only = overrides();
-        only.mode = TunnelMode::Tun;
-        only.split_mode = SplitMode::Only;
-        only.split_rules = vec![rule];
-        let config = mihomo_config::build(PANEL, &only).expect("builds");
-        validate(&config, &format!("only-{}", kind.token().to_lowercase()))
-            .unwrap_or_else(|why| panic!("{} inside a SUB-RULE: {why}", kind.token()));
+        let mut o = overrides();
+        o.mode = TunnelMode::Tun;
+        o.routing_rules = vec![
+            RoutingRule::new(*kind, kind.placeholder(), rules::DIRECT, Priority::Override),
+            RoutingRule::new(*kind, kind.placeholder(), rules::REJECT, Priority::Extend),
+            RoutingRule::new(*kind, kind.placeholder(), "PANEL-SELECT", Priority::Extend),
+        ];
+        let config = mihomo_config::build(PANEL, &o).expect("builds");
+        assert!(
+            config.contains(kind.token()),
+            "{} was not written",
+            kind.token()
+        );
+        validate(&config, &format!("rule-{}", kind.token().to_lowercase()))
+            .unwrap_or_else(|why| panic!("{}: {why}", kind.token()));
     }
 }
 

@@ -33,9 +33,15 @@ const GEOSITE_URL: &str =
 const GEOIP_URL: &str =
     "https://github.com/MetaCubeX/meta-rules-dat/releases/download/latest/geoip.metadb";
 
+/// Only an `IP-ASN` rule needs it, and mihomo fails the whole config on that
+/// rule without it — the same download-while-parsing trap as the other two.
+const ASN_URL: &str =
+    "https://github.com/MetaCubeX/meta-rules-dat/releases/download/latest/GeoLite2-ASN.mmdb";
+
 /// The names mihomo looks for in its working directory.
 const GEOSITE_FILE: &str = "GeoSite.dat";
 const GEOIP_FILE: &str = "geoip.metadb";
+const ASN_FILE: &str = "ASN.mmdb";
 
 /// A database is only trusted if it is at least this big. A truncated or
 /// error-page download would otherwise be cached forever and fail every connect
@@ -90,6 +96,25 @@ pub async fn ensure(directory: &Path) -> Result<bool, String> {
     Ok(downloaded)
 }
 
+/// The ASN database, for a config with an `IP-ASN` rule in it: copied from the
+/// build when it ships one, downloaded otherwise.
+pub async fn ensure_asn(directory: &Path) -> Result<(), String> {
+    let target = directory.join(ASN_FILE);
+    if is_usable(&target) {
+        return Ok(());
+    }
+    std::fs::create_dir_all(directory).map_err(|e| e.to_string())?;
+    seed_from_install(directory);
+    if is_usable(&target) {
+        return Ok(());
+    }
+    let http = reqwest::Client::builder()
+        .timeout(Duration::from_secs(180))
+        .build()
+        .map_err(|e| e.to_string())?;
+    fetch(&http, ASN_URL, &target).await
+}
+
 /// Copies the databases shipped with the build into the core's data directory.
 ///
 /// Best effort: a portable copy assembled by hand may not have them, and the
@@ -101,7 +126,7 @@ fn seed_from_install(directory: &Path) {
     let Some(shipped) = exe.parent().map(|d| d.join("geodata")) else {
         return;
     };
-    for name in [GEOSITE_FILE, GEOIP_FILE] {
+    for name in [GEOSITE_FILE, GEOIP_FILE, ASN_FILE] {
         let from = shipped.join(name);
         let to = directory.join(name);
         if from.is_file() && !is_usable(&to) {

@@ -209,53 +209,42 @@ the log for that line before reporting success, and names the cause rather than
 quoting the core. The Windows-specific case, a Wintun adapter that could not be
 created, points at the privilege it needs instead of the API call that failed.
 
-## Split tunnelling
+## Rules
 
-Two ways in to one list of rules. The app toggles are a convenience over
-`PROCESS-NAME`, matched on the **executable name with its extension** —
-`chrome.exe`, not `chrome`, because that is the string mihomo reads back out of
-the process table. A rule without the extension is accepted and never matches.
+The rules page replaces the apps screen and its split modes, as on macOS and
+modelled on Flowvy's "Мои правила" (`rules.rs`). A rule of the user's own
+matches with mihomo's grammar and sends what it matches to `DIRECT`, `REJECT`
+or one of the subscription's groups:
 
 | Kind | |
 |---|---|
-| `PROCESS-NAME` `PROCESS-NAME-REGEX` | by process, exact or regex |
-| `PROCESS-PATH` `PROCESS-PATH-REGEX` | by executable path |
-| `DOMAIN` `DOMAIN-SUFFIX` `DOMAIN-KEYWORD` `DOMAIN-REGEX` | by host |
-| `IP-CIDR` `GEOIP` | by address |
-| `GEOSITE` | by mihomo's site database |
-| `DST-PORT` | by destination port |
+| `DOMAIN` `DOMAIN-SUFFIX` `DOMAIN-KEYWORD` `DOMAIN-REGEX` `GEOSITE` | by host |
+| `IP-CIDR` `IP-CIDR6` `IP-ASN` `GEOIP` `SRC-IP-CIDR` | by address |
+| `DST-PORT` `SRC-PORT` | by port — one, a range `1000-2000`, or several joined by `/` |
+| `PROCESS-NAME` `PROCESS-PATH` and their `-REGEX` forms | by program — the name *with* `.exe`, which is what mihomo reads back |
+| `NETWORK` | `tcp` or `udp` |
 
-The TUN constraint is **per rule, not per screen**. `PROCESS-*` rules need the
-core to identify the process behind a connection, which only TUN can do — under
-a system proxy the core is handed a socket with no process behind it, so those
-rules are dropped from the generated config rather than written and silently
-never matched.
+**Override** puts a rule before the subscription's rules; **Extend** puts it
+after them but before their catch-all `MATCH`, where it can still match.
+Rules can be switched off, edited, deleted and dragged into order, and stay a
+draft until **Apply**, which has the core check the resulting config with
+`mihomo -t` first: one rule the core refuses takes the whole config down with
+it, so a refused set is not kept. Values are validated as they are typed —
+regexes compiled, ports and CIDRs parsed as real values in their own family,
+commas refused because mihomo splits a rule on them.
 
-A value is validated before it can be added — regexes are compiled, ports are
-range-checked, CIDRs are parsed as actual addresses against their own family's
-prefix range, and commas are refused because mihomo splits a rule on them. This
-matters more than it looks: a bad rule does not fail on its own, the core
-refuses the **whole config**, so the tunnel stops rather than the rule being
-skipped. (The macOS client only counted the slash in a CIDR and let the core
-reject `999.1.1.1/24`; this one parses it.)
+A rule pointing at a group the subscription has dropped is skipped rather than
+written, and shown in red. `PROCESS-*` rules need the core to know the program
+behind a connection, which only TUN gives it, so they are written only in TUN.
+An `IP-ASN` rule needs mihomo's ASN database, which ships beside the other two
+and is fetched when a build lacks it — left to the core, it would download it
+while parsing, through a resolver not yet working, and refuse the config.
 
-The three modes are not symmetric, because preserving the panel's own routing
-means something different in each:
-
-| Mode | Rules |
-|---|---|
-| All traffic | the panel's rules, untouched |
-| Except these | the split rules prepended pointing at `DIRECT` — what they match never reaches the panel's rules, everything else sees them as written |
-| Only these | what they match is handed to the panel's rules through a `SUB-RULE`, and everything else falls to `MATCH,DIRECT` |
-
-"Only these" could have pointed the rules straight at the selector, which is
-simpler and wrong: it forces *all* of that traffic through the node, including
-the hosts the panel deliberately routes direct, so a selected browser would lose
-the panel's split for local sites.
-
-An empty selection in "only these" falls back to tunnelling everything — an
-empty allow-list routes nothing at all, which reads as a broken VPN rather than
-as a configuration choice.
+The editor's program picker lists running programs, then installed ones, with a
+filter. A second tab lists the subscription's own rules to read. On the first
+launch after the apps screen, what was set there is carried over as rules: "all
+but these" to `DIRECT`, "only these" to the subscription's group, "all traffic"
+switched off — and the old settings are forgotten.
 
 ## Subscriptions
 
