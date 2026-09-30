@@ -29,16 +29,12 @@ const STARS: [(f32, f32, f32); 2] = [(30.5, 12.5, 1.7), (25.0, 8.0, 1.1)];
 pub struct Logo {
     palette: Palette,
     /// The slab's corner radius, in the *rendered* size — 10 at 32pt in the
-    /// sidebar, 5 at 18pt in the title bar.
+    /// sidebar.
     radius: f32,
     cache: Cache,
 }
 
 impl Logo {
-    pub fn new(palette: Palette) -> Self {
-        Logo::with_radius(palette, 10.0)
-    }
-
     pub fn with_radius(palette: Palette, radius: f32) -> Self {
         Logo {
             palette,

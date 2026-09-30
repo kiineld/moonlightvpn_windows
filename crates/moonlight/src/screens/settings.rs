@@ -7,7 +7,7 @@ use moonlight_core::preferences::AUTO_UPDATE_CHOICES;
 use moonlight_core::{format, AppLocale, TunnelMode};
 use moonlight_design::motion::radii;
 use moonlight_design::typography::{scale, EMPHATIC};
-use moonlight_design::{icon, Icon};
+use moonlight_design::{icon, Appearance, Icon};
 
 use crate::components;
 use crate::localization::{t, S};
@@ -270,11 +270,18 @@ fn application(app: &Moonlight) -> Element<'_, Message> {
         palette,
     );
 
-    let appearance_label = match app.preferences().appearance.as_deref() {
-        Some("dark") => S::ThemeDark,
-        Some("light") => S::ThemeLight,
-        _ => S::ThemeSystem,
-    };
+    // Moved here from a button in the page header, which cycled through the
+    // three without saying what the next press would do.
+    let appearance = components::segmented_compact(
+        &[
+            (Appearance::System, t(S::ThemeSystem, locale)),
+            (Appearance::Dark, t(S::ThemeDark, locale)),
+            (Appearance::Light, t(S::ThemeLight, locale)),
+        ],
+        app.appearance(),
+        Message::SetAppearance,
+        palette,
+    );
 
     let panel = column![
         components::setting_row(t(S::Language, locale).to_string(), None, language, palette),
@@ -282,15 +289,7 @@ fn application(app: &Moonlight) -> Element<'_, Message> {
         components::setting_row(
             t(S::Appearance, locale).to_string(),
             None,
-            button(
-                text(t(appearance_label, locale))
-                    .size(scale::BODY_SM)
-                    .font(moonlight_design::ui(EMPHATIC))
-            )
-            .on_press(Message::CycleAppearance)
-            .padding([10, 16])
-            .style(move |_, status| theme::header_button(palette, status))
-            .into(),
+            appearance,
             palette,
         ),
     ];

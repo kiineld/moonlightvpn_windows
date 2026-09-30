@@ -23,11 +23,10 @@ pub fn apply(hwnd: isize, material: Material, dark: bool) -> bool {
     use windows::core::BOOL;
     use windows::Win32::Foundation::HWND;
     use windows::Win32::Graphics::Dwm::{
-        DwmExtendFrameIntoClientArea, DwmSetWindowAttribute, DWMSBT_MAINWINDOW,
-        DWMSBT_TRANSIENTWINDOW, DWMWA_SYSTEMBACKDROP_TYPE, DWMWA_USE_IMMERSIVE_DARK_MODE,
-        DWMWA_WINDOW_CORNER_PREFERENCE, DWMWCP_ROUND,
+        DwmSetWindowAttribute, DWMSBT_MAINWINDOW, DWMSBT_TRANSIENTWINDOW,
+        DWMWA_SYSTEMBACKDROP_TYPE, DWMWA_USE_IMMERSIVE_DARK_MODE, DWMWA_WINDOW_CORNER_PREFERENCE,
+        DWMWCP_ROUND,
     };
-    use windows::Win32::UI::Controls::MARGINS;
 
     let hwnd = HWND(hwnd as _);
     let kind = match material {
@@ -51,15 +50,10 @@ pub fn apply(hwnd: isize, material: Material, dark: bool) -> bool {
             &corners as *const _ as _,
             std::mem::size_of_val(&corners) as u32,
         );
-        // The frame reaches over the whole client area, which is what lets the
-        // material show wherever the app paints translucent.
-        let margins = MARGINS {
-            cxLeftWidth: -1,
-            cxRightWidth: -1,
-            cyTopHeight: -1,
-            cyBottomHeight: -1,
-        };
-        let _ = DwmExtendFrameIntoClientArea(hwnd, &margins);
+        // No DwmExtendFrameIntoClientArea: the window is already transparent,
+        // which is all the material needs to show, and a frame extended over
+        // the client area brings DWM's own caption buttons with it, drawn
+        // faintly under the app's.
         DwmSetWindowAttribute(
             hwnd,
             DWMWA_SYSTEMBACKDROP_TYPE,

@@ -1,6 +1,6 @@
 //! The connect screen: the dial on the left, the server list on the right.
 
-use iced::widget::{button, canvas, column, container, row, scrollable, text};
+use iced::widget::{button, canvas, column, container, row, scrollable, text, tooltip};
 use iced::{Alignment, Border, Element, Length};
 
 use moonlight_core::{format, ConnectionState, Node};
@@ -395,17 +395,42 @@ fn server_column(app: &Moonlight) -> Element<'_, Message> {
     let locale = app.locale_of();
     let nodes = app.nodes();
 
-    let heading = container(
-        row![
-            components::overline(t(S::Servers, locale), palette),
-            hspace(Length::Fill),
-            text(format!("{} {}", nodes.len(), t(S::Nodes, locale)))
-                .size(12.0)
-                .color(palette.text_muted),
-        ]
-        .align_y(Alignment::Center),
-    )
-    .padding([2, 4]);
+    let mut heading = row![
+        components::overline(t(S::Servers, locale), palette),
+        text(format!("{} {}", nodes.len(), t(S::Nodes, locale)))
+            .size(12.0)
+            .color(palette.text_muted),
+        hspace(Length::Fill),
+    ]
+    .spacing(10)
+    .align_y(Alignment::Center);
+    // Ping and refresh sit over the list they act on, as on macOS, and only
+    // once there is a subscription to measure or fetch again.
+    if app.preferences().subscription_url.is_some() {
+        heading = heading.push(list_action(
+            app,
+            Icon::Activity,
+            if app.is_pinging() {
+                S::Measuring
+            } else {
+                S::Ping
+            },
+            app.is_pinging(),
+            Message::Ping,
+        ));
+        heading = heading.push(list_action(
+            app,
+            Icon::RefreshCw,
+            if app.is_refreshing() {
+                S::Refreshing
+            } else {
+                S::Refresh
+            },
+            app.is_refreshing(),
+            Message::Refresh,
+        ));
+    }
+    let heading = container(heading).padding([2, 4]);
 
     let mut list = column![heading, vspace(Length::Fixed(12.0))].spacing(2);
 
@@ -458,6 +483,40 @@ fn server_column(app: &Moonlight) -> Element<'_, Message> {
     }
 
     list.height(Length::Fill).width(Length::Fill).into()
+}
+
+/// A round glyph button over the server list, named by its tooltip. Its glyph
+/// becomes the loader while the work runs.
+fn list_action<'a>(
+    app: &'a Moonlight,
+    glyph: Icon,
+    label: S,
+    busy: bool,
+    message: Message,
+) -> Element<'a, Message> {
+    let palette = app.palette_of();
+    let glyph = if busy { Icon::LoaderCircle } else { glyph };
+    let button = button(
+        container(moonlight_design::icon_thin(glyph, 16.0, palette.text2, 2.2))
+            .center(Length::Fill),
+    )
+    .on_press(message)
+    .width(Length::Fixed(34.0))
+    .height(Length::Fixed(34.0))
+    .padding(0)
+    .style(move |_, status| theme::icon_button(palette, status));
+    tooltip(
+        button,
+        container(
+            text(t(label, app.locale_of()))
+                .size(scale::META)
+                .color(palette.text),
+        )
+        .padding([6, 10])
+        .style(move |_| theme::panel(palette)),
+        tooltip::Position::Bottom,
+    )
+    .into()
 }
 
 /// "Авто" is the app's own latency picker.

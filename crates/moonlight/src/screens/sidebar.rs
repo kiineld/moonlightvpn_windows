@@ -4,9 +4,15 @@
 //! the reference this product is meant to look like: 236pt expanded, 72pt as an
 //! icon rail, and a quota card that is always present — with zeroes rather than
 //! dashes before a subscription exists.
+//!
+//! It floats: a rounded panel inset from the window's edges, with the tab that
+//! opens and closes it swelling out of its own edge.
 
+use iced::widget::canvas::{Geometry, LineCap, LineJoin, Path, Stroke};
 use iced::widget::{button, canvas, column, container, row, text};
-use iced::{Alignment, Background, Border, Element, Length};
+use iced::{
+    mouse, Alignment, Background, Border, Element, Length, Point, Rectangle, Renderer, Theme,
+};
 
 use moonlight_core::preferences::Preferences;
 use moonlight_core::{format, AppLocale, SubscriptionInfo};
@@ -27,13 +33,16 @@ const WORDMARK: f32 = 17.0;
 const MARK: f32 = 32.0;
 const MARK_RADIUS: f32 = 10.0;
 
-/// The edge tab: a full circle sitting on the rail's edge, most of it over the
-/// page so the chevron at its centre is plainly centred.
-const TAB_DIAMETER: f32 = 34.0;
-/// How far the circle laps back over the rail. Half its width, so the circle is
-/// centred on the seam — straddling it, half over the rail and half over the
-/// page — rather than floating out on the page side.
-pub const TAB_OVERLAP: f32 = TAB_DIAMETER / 2.0;
+/// How far the tab swells out of the panel's edge, and how far along the edge
+/// the swell reaches either side of its middle.
+const TAB_DEPTH: f32 = 16.0;
+const TAB_REACH: f32 = 30.0;
+/// The strip of the tab laid back over the panel, covering the panel's own
+/// border where the swell leaves it.
+pub const TAB_OVERLAP: f32 = 2.5;
+
+/// The gap between the panel and the window's edges.
+pub const INSET: f32 = 10.0;
 
 /// Where the rail swaps between its two layouts, mid-glide.
 ///
@@ -81,19 +90,12 @@ pub fn view<'a>(
         .width(Length::Fixed(width))
         .height(Length::Fill)
         .style(move |_| container::Style {
-            background: Some(Background::Color(palette.bg_deep)),
-            ..Default::default()
-        })
-        .into()
-}
-
-/// The rail's right-hand hairline, drawn as its own strip so it spans the full
-/// height rather than being clipped by the rail's padding.
-pub fn rule<'a>(palette: Palette) -> Element<'a, Message> {
-    container(hspace(Length::Fixed(1.0)))
-        .height(Length::Fill)
-        .style(move |_| container::Style {
-            background: Some(Background::Color(palette.hairline)),
+            background: Some(Background::Color(palette.surface)),
+            border: Border {
+                radius: iced::border::Radius::from(radii::CARD_LG),
+                width: border::HAIRLINE,
+                color: palette.hairline,
+            },
             ..Default::default()
         })
         .into()
@@ -139,51 +141,103 @@ fn header<'a>(palette: Palette, collapsed: bool) -> Element<'a, Message> {
     .into()
 }
 
-/// The half-circle tab that opens and closes the rail.
+/// The tab that opens and closes the rail.
 ///
-/// It straddles the seam between rail and page: a D — flat against the rail,
-/// bulging out over the page — with a chevron pointing the way it will move the
-/// edge. Left to close, right to open. The macOS client puts the control on the
-/// edge for the same reason, because that is the line the change happens on.
+/// Not a chip laid on the seam but the panel's own edge swelling out, leaving
+/// and rejoining it along its tangent, in the panel's fill and rimmed by its
+/// hairline — one surface, as the macOS client draws it. The chevron turns
+/// with the rail rather than being swapped: `turn` is 0 open, pointing left,
+/// and 1 closed, pointing right, and in between while the rail glides.
 ///
-/// Returned on its own so the shell can float it, vertically centred, over the
-/// seam rather than reserving a column for it.
-pub fn edge_toggle<'a>(palette: Palette, collapsed: bool) -> Element<'a, Message> {
-    let glyph = if collapsed {
-        Icon::ChevronRight
-    } else {
-        Icon::ChevronLeft
-    };
-
+/// Returned on its own so the shell can float it over the edge, vertically
+/// centred, rather than reserving a column for it.
+pub fn edge_toggle<'a>(palette: Palette, turn: f32) -> Element<'a, Message> {
     button(
-        // Dead centre of the circle — nothing else to reason about.
-        container(moonlight_design::icon_thin(glyph, 15.0, palette.text2, 2.4))
-            .center(Length::Fill),
+        canvas(Tab { palette, turn })
+            .width(Length::Fixed(TAB_OVERLAP + TAB_DEPTH + 1.0))
+            .height(Length::Fixed(TAB_REACH * 2.0)),
     )
     .on_press(Message::ToggleSidebar)
-    .width(Length::Fixed(TAB_DIAMETER))
-    .height(Length::Fixed(TAB_DIAMETER))
     .padding(0)
-    .style(move |_, status| {
-        // A surface chip with a hairline, sitting on the seam and drawn over the
-        // rail's last few pixels so it reads as attached. Circle, so its centred
-        // glyph is obviously centred.
-        let fill = match status {
-            button::Status::Hovered | button::Status::Pressed => palette.surface3,
-            _ => palette.surface2,
-        };
-        button::Style {
-            background: Some(Background::Color(fill)),
-            text_color: palette.text2,
-            border: Border {
-                radius: iced::border::Radius::from(TAB_DIAMETER / 2.0),
-                width: border::HAIRLINE,
-                color: palette.hairline,
-            },
-            ..Default::default()
-        }
-    })
+    .style(|_, _| button::Style::default())
     .into()
+}
+
+struct Tab {
+    palette: Palette,
+    turn: f32,
+}
+
+impl<Message> canvas::Program<Message> for Tab {
+    type State = ();
+
+    fn draw(
+        &self,
+        _state: &Self::State,
+        renderer: &Renderer,
+        _theme: &Theme,
+        bounds: Rectangle,
+        cursor: mouse::Cursor,
+    ) -> Vec<Geometry> {
+        let mut frame = canvas::Frame::new(renderer, bounds.size());
+        // The panel's border is drawn inside its bounds, so its line sits half
+        // a pixel in from the edge; the swell leaves from that line.
+        let (edge, middle) = (TAB_OVERLAP - 0.5, bounds.height / 2.0);
+        let (reach, depth) = (TAB_REACH, TAB_DEPTH);
+
+        // Two cubics, each leaving the edge along it and meeting the other
+        // square to it at the deepest point: a bell, not a bitten-off circle.
+        let swell = |b: &mut canvas::path::Builder| {
+            b.move_to(Point::new(edge, middle - reach));
+            b.bezier_curve_to(
+                Point::new(edge, middle - reach * 0.45),
+                Point::new(edge + depth, middle - reach * 0.5),
+                Point::new(edge + depth, middle),
+            );
+            b.bezier_curve_to(
+                Point::new(edge + depth, middle + reach * 0.5),
+                Point::new(edge, middle + reach * 0.45),
+                Point::new(edge, middle + reach),
+            );
+        };
+        let body = Path::new(|b| {
+            swell(b);
+            b.line_to(Point::new(0.0, middle + reach));
+            b.line_to(Point::new(0.0, middle - reach));
+            b.close();
+        });
+        frame.fill(&body, self.palette.surface);
+        frame.stroke(
+            &Path::new(swell),
+            Stroke::default()
+                .with_width(border::HAIRLINE)
+                .with_color(self.palette.hairline),
+        );
+
+        let ink = if cursor.is_over(bounds) {
+            self.palette.text
+        } else {
+            self.palette.text2
+        };
+        let centre = Point::new(edge + depth * 0.42, middle);
+        let (sin, cos) = (std::f32::consts::PI * self.turn).sin_cos();
+        let at =
+            |x: f32, y: f32| Point::new(centre.x + x * cos - y * sin, centre.y + x * sin + y * cos);
+        let chevron = Path::new(|b| {
+            b.move_to(at(2.0, -4.5));
+            b.line_to(at(-2.0, 0.0));
+            b.line_to(at(2.0, 4.5));
+        });
+        frame.stroke(
+            &chevron,
+            Stroke::default()
+                .with_width(2.0)
+                .with_color(ink)
+                .with_line_cap(LineCap::Round)
+                .with_line_join(LineJoin::Round),
+        );
+        vec![frame.into_geometry()]
+    }
 }
 
 fn nav_item<'a>(

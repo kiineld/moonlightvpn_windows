@@ -308,7 +308,7 @@ pub enum Message {
     Navigate(Page),
     ToggleSidebar,
     ToggleLaunchAtLogin,
-    CycleAppearance,
+    SetAppearance(Appearance),
     SetLocale(AppLocale),
 
     ToggleConnection,
@@ -742,23 +742,27 @@ impl Moonlight {
         Palette::lerp(&previous, &target, Curve::EASE.at(linear))
     }
 
+    /// The theme as chosen: dark, light, or whatever Windows uses.
+    pub fn appearance(&self) -> Appearance {
+        match self.preferences.appearance.as_deref() {
+            Some("dark") => Appearance::Dark,
+            Some("light") => Appearance::Light,
+            _ => Appearance::System,
+        }
+    }
+
     /// Whether the theme is the dark one, whichever way it was chosen.
     fn is_dark(&self) -> bool {
-        match self.preferences.appearance.as_deref() {
-            Some("dark") => true,
-            Some("light") => false,
-            _ => system_prefers_dark(),
+        match self.appearance() {
+            Appearance::Dark => true,
+            Appearance::Light => false,
+            Appearance::System => system_prefers_dark(),
         }
     }
 
     /// Where the theme is heading, ignoring any fade in progress.
     fn target_palette(&self) -> Palette {
-        let appearance = match self.preferences.appearance.as_deref() {
-            Some("dark") => Appearance::Dark,
-            Some("light") => Appearance::Light,
-            _ => Appearance::System,
-        };
-        appearance.palette(system_prefers_dark())
+        self.appearance().palette(system_prefers_dark())
     }
 
     fn save(&self) {
@@ -836,17 +840,15 @@ impl Moonlight {
                 self.sidebar_started = Some(Instant::now());
                 self.save();
             }
-            Message::CycleAppearance => {
+            Message::SetAppearance(appearance) => {
                 // Where the colours are *now*, which is not necessarily the old
-                // theme: pressing the button twice quickly has to fade on from
-                // the half-blended palette rather than snapping back first.
+                // theme: switching twice quickly has to fade on from the
+                // half-blended palette rather than snapping back first.
                 self.previous_palette = Some(self.palette());
-                // System → dark → light → system, which is the order the macOS
-                // client's sun button cycles in.
-                self.preferences.appearance = match self.preferences.appearance.as_deref() {
-                    None => Some("dark".into()),
-                    Some("dark") => Some("light".into()),
-                    _ => None,
+                self.preferences.appearance = match appearance {
+                    Appearance::System => None,
+                    Appearance::Dark => Some("dark".into()),
+                    Appearance::Light => Some("light".into()),
                 };
                 // The material has its own dark and light tint, and keeps the
                 // one it was given until told otherwise.
@@ -1805,6 +1807,24 @@ impl Moonlight {
         self.main_view()
     }
 
+    /// A page's title and the line under it, at the head of the page.
+    fn page_title(&self) -> Element<'_, Message> {
+        let palette = self.palette();
+        let locale = self.locale();
+        column![
+            iced::widget::text(t(self.page.title(), locale))
+                .font(moonlight_design::display())
+                .size(moonlight_design::typography::scale::PLAN)
+                .line_height(moonlight_design::typography::line::TITLE)
+                .color(palette.text),
+            iced::widget::text(t(self.page.subtitle(), locale))
+                .size(moonlight_design::typography::scale::BODY_SM)
+                .color(palette.text2),
+        ]
+        .spacing(6)
+        .into()
+    }
+
     fn main_view(&self) -> Element<'_, Message> {
         let palette = self.palette();
         let locale = self.locale();
@@ -1826,91 +1846,94 @@ impl Moonlight {
             Page::Connections => screens::connections::view(self),
         };
 
+        // Every page but the connect one opens with its own title, and it
+        // scrolls with the page: there is no header bar to hold it.
+        let body = if scrolls {
+            column![self.page_title(), body].spacing(22).into()
+        } else {
+            body
+        };
+
         // The rail's contents swap to icon-only the moment it is collapsed, but
         // its *width* glides — so the labels do not linger in a box too narrow
         // to hold them.
+        let rail = self.sidebar_width();
+        let inset = screens::sidebar::INSET;
         let shell = row![
-            screens::sidebar::view(
+            container(screens::sidebar::view(
                 palette,
                 locale,
                 self.page.rail_item(),
-                self.sidebar_width(),
+                rail,
                 &self.preferences,
                 &self.info,
-            ),
-            screens::sidebar::rule(palette),
-            column![
-                screens::header::view(self),
-                screens::header::rule(palette),
-                container(column![
-                    // The entrance: the screen starts 18px low and settles.
-                    vspace(Length::Fixed(self.page_rise())),
-                    if scrolls {
-                        Element::from(
-                            scrollable(
-                                // The bar is drawn *inside* the scrollable's
-                                // bounds, over whatever is beneath it — cards on
-                                // Settings ran under it and the update button
-                                // came out half-covered. Reserving the gutter on
-                                // the content is what keeps them clear of it.
-                                container(body).padding(iced::Padding {
-                                    right: SCROLLBAR_GUTTER,
-                                    ..iced::Padding::ZERO
-                                }),
-                            )
-                            .id(PAGE_SCROLL)
-                            .direction(iced::widget::scrollable::Direction::Vertical(
-                                iced::widget::scrollable::Scrollbar::new()
-                                    .width(SCROLLBAR_WIDTH)
-                                    .scroller_width(SCROLLBAR_WIDTH)
-                                    .margin(SCROLLBAR_MARGIN),
-                            ))
-                            .height(Length::Fill)
-                            .style(move |theme, _| theme::scroller(palette, theme)),
+            ))
+            .padding(iced::Padding {
+                top: inset,
+                right: 0.0,
+                bottom: inset,
+                left: inset,
+            }),
+            container(column![
+                // The entrance: the screen starts 18px low and settles.
+                vspace(Length::Fixed(self.page_rise())),
+                if scrolls {
+                    Element::from(
+                        scrollable(
+                            // The bar is drawn *inside* the scrollable's bounds,
+                            // over whatever is beneath it — cards on Settings ran
+                            // under it and the update button came out
+                            // half-covered. Reserving the gutter on the content
+                            // is what keeps them clear of it.
+                            container(body).padding(iced::Padding {
+                                right: SCROLLBAR_GUTTER,
+                                ..iced::Padding::ZERO
+                            }),
                         )
-                    } else {
-                        body
-                    }
-                ])
-                .height(Length::Fill)
-                // 20 above, 24 the rest of the way round, from the composition.
-                .padding(iced::Padding {
-                    top: 20.0,
-                    right: 24.0,
-                    bottom: 24.0,
-                    left: 24.0,
-                }),
-            ]
-            .width(Length::Fill),
+                        .id(PAGE_SCROLL)
+                        .direction(iced::widget::scrollable::Direction::Vertical(
+                            iced::widget::scrollable::Scrollbar::new()
+                                .width(SCROLLBAR_WIDTH)
+                                .scroller_width(SCROLLBAR_WIDTH)
+                                .margin(SCROLLBAR_MARGIN),
+                        ))
+                        .height(Length::Fill)
+                        .style(move |theme, _| theme::scroller(palette, theme)),
+                    )
+                } else {
+                    body
+                }
+            ])
+            .width(Length::Fill)
+            .height(Length::Fill)
+            // Clear of the caption band above, 24 the rest of the way round.
+            .padding(iced::Padding {
+                top: moonlight_design::motion::metrics::TITLE_BAR + 8.0,
+                right: 24.0,
+                bottom: 24.0,
+                left: 24.0,
+            }),
         ]
         .height(Length::Fill);
 
-        // The rail's toggle floats over the seam, vertically centred, rather
-        // than living in a column of its own: the tab straddles the boundary,
-        // half on the rail and half over the page, and only the tab itself
-        // catches clicks — the rest of the overlay lets them fall through.
+        // The rail's tab floats over its edge, vertically centred, rather than
+        // living in a column of its own; only the tab catches clicks, the rest
+        // of the overlay lets them fall through.
+        let turn = {
+            use moonlight_design::motion::metrics;
+            ((metrics::RAIL - rail) / (metrics::RAIL - metrics::RAIL_COLLAPSED)).clamp(0.0, 1.0)
+        };
         let toggle = container(
             row![
-                // The circle is centred on the rail's right edge, so its left
-                // half is hidden behind the rail and its right half bulges out.
-                hspace(Length::Fixed(
-                    self.sidebar_width() - screens::sidebar::TAB_OVERLAP,
-                )),
-                screens::sidebar::edge_toggle(palette, self.sidebar_collapsed),
+                hspace(Length::Fixed(inset + rail - screens::sidebar::TAB_OVERLAP)),
+                screens::sidebar::edge_toggle(palette, turn),
             ]
             .align_y(iced::Alignment::Center),
         )
         .center_y(Length::Fill);
 
-        let shell = iced::widget::stack![shell, toggle].height(Length::Fill);
-
         let window = container(
-            column![
-                screens::titlebar::view(self),
-                screens::titlebar::rule(palette),
-                shell,
-            ]
-            .height(Length::Fill),
+            iced::widget::stack![shell, toggle, screens::titlebar::view(self)].height(Length::Fill),
         )
         .width(Length::Fill)
         .height(Length::Fill)
@@ -1925,7 +1948,7 @@ impl Moonlight {
         let window: Element<'_, Message> = match self.update_banner() {
             Some(version) => iced::widget::stack![
                 window,
-                // The bottom corner: the header's actions sit in the top one.
+                // The bottom corner, clear of the caption controls in the top one.
                 container(screens::update::banner(self, version))
                     .align_right(Length::Fill)
                     .align_bottom(Length::Fill)
@@ -2885,14 +2908,14 @@ mod tests {
     }
 
     #[test]
-    fn appearance_cycles_system_dark_light() {
+    fn the_theme_is_stored_as_chosen_and_system_as_nothing() {
         let mut app = app();
-        assert_eq!(app.preferences.appearance, None);
-        let _ = app.update(Message::CycleAppearance);
+        assert_eq!(app.appearance(), Appearance::System);
+        let _ = app.update(Message::SetAppearance(Appearance::Dark));
         assert_eq!(app.preferences.appearance.as_deref(), Some("dark"));
-        let _ = app.update(Message::CycleAppearance);
+        let _ = app.update(Message::SetAppearance(Appearance::Light));
         assert_eq!(app.preferences.appearance.as_deref(), Some("light"));
-        let _ = app.update(Message::CycleAppearance);
+        let _ = app.update(Message::SetAppearance(Appearance::System));
         assert_eq!(app.preferences.appearance, None);
     }
 

@@ -195,13 +195,18 @@ pub fn action_row<'a, M: Clone + 'a>(
 /// the target, not a 20pt square at the end of it.
 pub fn toggle<'a, M: Clone + 'a>(on: bool, message: M, palette: Palette) -> Element<'a, M> {
     let track_fill = if on { palette.accent } else { palette.surface3 };
-    // The knob is white in both states and both themes: on the accent it is the
-    // only thing that reads, and on the empty track it is what says "switch"
-    // rather than "empty pill".
+    // The knob is the ink that sits on the accent when on, and the type colour
+    // on the empty track: with white as the accent, a white knob vanished into
+    // a switched-on track.
+    let knob_fill = if on {
+        palette.text_on_accent
+    } else {
+        palette.text
+    };
     let knob = container(Space::new().width(Length::Fixed(TOGGLE_KNOB)))
         .height(Length::Fixed(TOGGLE_KNOB))
-        .style(|_| container::Style {
-            background: Some(Background::Color(Color::WHITE)),
+        .style(move |_| container::Style {
+            background: Some(Background::Color(knob_fill)),
             border: Border {
                 radius: iced::border::Radius::from(radii::PILL),
                 ..Default::default()
