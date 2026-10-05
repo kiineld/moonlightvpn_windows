@@ -10,6 +10,8 @@
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Icon {
     Activity,
+    ArrowDown,
+    ArrowUp,
     Check,
     ChevronLeft,
     ChevronDown,
@@ -27,6 +29,7 @@ pub enum Icon {
     LoaderCircle,
     Lock,
     LogOut,
+    Megaphone,
     MessageCircle,
     Minus,
     Monitor,
@@ -57,6 +60,8 @@ pub enum Icon {
 impl Icon {
     pub const ALL: &'static [Icon] = &[
         Icon::Activity,
+        Icon::ArrowDown,
+        Icon::ArrowUp,
         Icon::Check,
         Icon::ChevronLeft,
         Icon::ChevronDown,
@@ -74,6 +79,7 @@ impl Icon {
         Icon::LoaderCircle,
         Icon::Lock,
         Icon::LogOut,
+        Icon::Megaphone,
         Icon::MessageCircle,
         Icon::Minus,
         Icon::Monitor,
@@ -105,6 +111,9 @@ impl Icon {
     pub fn name(self) -> &'static str {
         match self {
             Icon::Activity => "activity",
+            Icon::ArrowDown => "arrow-down",
+            Icon::ArrowUp => "arrow-up",
+            Icon::Megaphone => "megaphone",
             Icon::Check => "check",
             Icon::ChevronLeft => "chevron-left",
             Icon::ChevronDown => "chevron-down",
@@ -169,6 +178,9 @@ impl Icon {
             Icon::Layers => &["M12.83 2.18a2 2 0 0 0-1.66 0L2.6 6.08a1 1 0 0 0 0 1.83l8.58 3.91a2 2 0 0 0 1.66 0l8.58-3.9a1 1 0 0 0 0-1.83z", "M2 12a1 1 0 0 0 .58.91l8.6 3.91a2 2 0 0 0 1.65 0l8.58-3.9A1 1 0 0 0 22 12", "M2 17a1 1 0 0 0 .58.91l8.6 3.91a2 2 0 0 0 1.65 0l8.58-3.9A1 1 0 0 0 22 17"],
             Icon::Link2 => &["M9 17H7A5 5 0 0 1 7 7h2", "M15 7h2a5 5 0 1 1 0 10h-2", "M8.0 12.0L16.0 12.0"],
             Icon::LoaderCircle => &["M21 12a9 9 0 1 1-6.219-8.56"],
+            Icon::ArrowDown => &["M12 5v14", "m19 12-7 7-7-7"],
+            Icon::ArrowUp => &["m5 12 7-7 7 7", "M12 19V5"],
+            Icon::Megaphone => &["m3 11 18-5v12L3 14v-3z", "M11.6 16.8a3 3 0 1 1-5.8-1.6"],
             Icon::Lock => &["M5.0 11.0H19.0a2.0 2.0 0 0 1 2.0 2.0V20.0a2.0 2.0 0 0 1 -2.0 2.0H5.0a2.0 2.0 0 0 1 -2.0 -2.0V13.0a2.0 2.0 0 0 1 2.0 -2.0Z", "M7 11V7a5 5 0 0 1 10 0v4"],
             Icon::LogOut => &["m16 17 5-5-5-5", "M21 12H9", "M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"],
             Icon::MessageCircle => &["M7.9 20A9 9 0 1 0 4 16.1L2 22Z"],

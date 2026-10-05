@@ -198,8 +198,22 @@ pub fn subscription_path() -> PathBuf {
     support_directory().join("subscription.yaml")
 }
 
+/// The file has two writers — the window, for what the user sets in it, and
+/// the controller, for what it learns — and each writes it whole, through the
+/// same temporary file. Unguarded, one's write could land inside the other's:
+/// the controller would read the file while the window was replacing it, get
+/// nothing, and put defaults back over the theme and language just chosen; or
+/// the two would fill the one temporary file at once and whichever renamed it
+/// last won. So every read and write of it in this process takes this first.
+static FILE: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 impl Preferences {
     pub fn load() -> Preferences {
+        let _held = FILE.lock();
+        Preferences::read()
+    }
+
+    fn read() -> Preferences {
         let path = preferences_path();
         let Ok(text) = std::fs::read_to_string(&path) else {
             return Preferences::default();
@@ -211,6 +225,24 @@ impl Preferences {
     }
 
     pub fn save(&self) -> std::io::Result<()> {
+        let _held = FILE.lock();
+        self.write()
+    }
+
+    /// Saves these preferences after `keep` has taken, from the file as it
+    /// stands, whatever in it is not this writer's to change — the two as one
+    /// step, so nothing the other writer saves can fall between them and be
+    /// written back over.
+    pub fn save_keeping(
+        &mut self,
+        keep: impl FnOnce(&mut Preferences, Preferences),
+    ) -> std::io::Result<()> {
+        let _held = FILE.lock();
+        keep(self, Preferences::read());
+        self.write()
+    }
+
+    fn write(&self) -> std::io::Result<()> {
         let directory = support_directory();
         std::fs::create_dir_all(&directory)?;
 

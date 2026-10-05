@@ -67,7 +67,7 @@ pub fn soft_divider<'a, M: 'a>(palette: Palette) -> Element<'a, M> {
 
 /// The rounded square that carries an icon at the head of a row.
 ///
-/// Its fill is the quiet tile grey with the glyph in the text colour; the
+/// Its fill is the quiet tile glass with the glyph in the text colour; the
 /// row that is the screen's main action takes the accent fill instead, and a
 /// destructive one the danger fill.
 pub fn tile<'a, M: 'a>(glyph: Icon, fill: Color, ink: Color) -> Element<'a, M> {
@@ -77,9 +77,13 @@ pub fn tile<'a, M: 'a>(glyph: Icon, fill: Color, ink: Color) -> Element<'a, M> {
         .center(Length::Fixed(42.0))
         .style(move |_| container::Style {
             background: Some(Background::Color(fill)),
+            // Rimmed in its own ink: a hairline on a glass tile — white glass
+            // on a white card has no other edge — and nothing to see on a
+            // filled one, whose ink is the fill's opposite.
             border: Border {
                 radius: iced::border::Radius::from(radii::TILE),
-                ..Default::default()
+                width: 1.0,
+                color: theme::alpha(ink, 0.10),
             },
             ..Default::default()
         })
@@ -106,11 +110,7 @@ pub fn letter_tile<'a, M: 'a>(name: &str, palette: Palette) -> Element<'a, M> {
     .center(Length::Fixed(42.0))
     .style(move |_| container::Style {
         background: Some(Background::Color(fill)),
-        border: Border {
-            radius: iced::border::Radius::from(radii::TILE),
-            ..Default::default()
-        },
-        ..Default::default()
+        ..theme::control(palette, radii::TILE)
     })
     .into()
 }
@@ -178,7 +178,7 @@ pub fn action_row<'a, M: Clone + 'a>(
     }
 
     let mut element = button(content)
-        .padding([15, 18])
+        .padding([13.0, ROW_INSET])
         .width(Length::Fill)
         .style(move |_, status| theme::row_button(palette, false, status));
     if let Some(message) = on_press {
@@ -241,7 +241,7 @@ pub fn setting_row<'a, M: 'a>(
     row![labels.width(Length::Fill), control]
         .spacing(14)
         .align_y(Alignment::Center)
-        .padding([15, 18])
+        .padding([14.0, ROW_INSET])
         .into()
 }
 
@@ -308,12 +308,8 @@ impl Proportions {
     };
 }
 
-/// The segmented track both sizes are cut from.
-///
-/// Surface-2 with **no border** and 3px of padding, per the composition. Giving
-/// it the panel surface and a hairline — as an earlier pass did — draws a second
-/// bordered box inside a bordered card, which is what made the language switch
-/// read as a nested panel rather than as a control.
+/// The segmented track both sizes are cut from: a rimmed piece of glass with
+/// 3px of padding, the capsule gliding inside it.
 fn track<'a, T: Copy + PartialEq + 'a, M: Clone + 'a>(
     options: &[(T, &'a str)],
     selected: T,
@@ -380,14 +376,7 @@ fn track<'a, T: Copy + PartialEq + 'a, M: Clone + 'a>(
     ))
     .width(width)
     .padding(3)
-    .style(move |_| container::Style {
-        background: Some(Background::Color(palette.surface2)),
-        border: Border {
-            radius: iced::border::Radius::from(radii::PILL),
-            ..Default::default()
-        },
-        ..Default::default()
-    })
+    .style(move |_| theme::control(palette, radii::PILL))
     .into()
 }
 
@@ -434,6 +423,28 @@ pub fn bar<'a, M: 'a>(fraction: f32, palette: Palette, height: f32) -> Element<'
 
 /// A panel: the outer surface a screen's columns sit on.
 pub const SURFACE_PADDING: f32 = 18.0;
+
+/// A card of rows keeps this much clear round them, and a row this much
+/// either side of its own content: together the 18 the macOS client insets a
+/// row's text from its card. They were 18 and 18 — every row's text stood
+/// twice as far in as the card's own corner asked for.
+pub const GROUP_PADDING: f32 = 6.0;
+pub const ROW_INSET: f32 = SURFACE_PADDING - GROUP_PADDING;
+
+/// A card of rows: settings, actions. The rows bring their own inset, so the
+/// card adds only the little that keeps a row's hover clear of its corners.
+pub fn group<'a, M: 'a>(content: impl Into<Element<'a, M>>, palette: Palette) -> Element<'a, M> {
+    container(content)
+        .padding(GROUP_PADDING)
+        .width(Length::Fill)
+        .style(move |_| theme::panel(palette))
+        .into()
+}
+
+/// The line between two rows of a [`group`], as far in as their text.
+pub fn row_divider<'a, M: 'a>(palette: Palette) -> Element<'a, M> {
+    container(divider(palette)).padding([0.0, ROW_INSET]).into()
+}
 
 pub fn surface<'a, M: 'a>(content: impl Into<Element<'a, M>>, palette: Palette) -> Element<'a, M> {
     container(content)
@@ -559,43 +570,190 @@ pub fn empty_state_full<'a, M: Clone + 'a>(
         .into()
 }
 
-/// The service's announcement, as it wrote it, with a cross to put it away.
+/// The service's announcement, as it wrote it. The whole banner is the
+/// button: pressing it folds the message down to its first line, and pressing
+/// that opens it again — the chevron says which way it goes.
 ///
-/// Hidden per message: dismissing one does not hide the next, which is news by
-/// definition.
+/// Folded per message: a new one arrives open, which is news by definition.
+///
+/// `openness` is 0 folded and 1 open, and between the two while it moves:
+/// then the whole message is there and the banner is a window on it that
+/// grows or closes, so folding is a movement and not a swap. `width` is the
+/// banner's own, which decides how many lines the message takes and so how
+/// far there is to go.
 pub fn announce_banner<'a, M: Clone + 'a>(
     message: &'a str,
+    openness: f32,
+    width: f32,
+    toggle: M,
+    palette: Palette,
+) -> Element<'a, M> {
+    let folded = openness <= 0.0;
+    let words = if folded {
+        text(announce_headline(message)).wrapping(iced::widget::text::Wrapping::None)
+    } else {
+        text(message)
+    };
+    let mut body = container(
+        words
+            .size(ANNOUNCE_TYPE)
+            .line_height(iced::widget::text::LineHeight::Absolute(
+                ANNOUNCE_LINE.into(),
+            ))
+            .font(moonlight_design::ui(ROW_TITLE))
+            .color(if openness < 0.5 {
+                palette.text2
+            } else {
+                palette.text
+            }),
+    )
+    .width(Length::Fill)
+    .clip(true);
+    if openness > 0.0 && openness < 1.0 {
+        let lines = announce_lines(message, width - ANNOUNCE_CHROME);
+        body = body.max_height(ANNOUNCE_LINE * (1.0 + (lines - 1.0) * openness));
+    }
+    button(
+        row![
+            icon(Icon::Megaphone, 16.0, palette.accent_ink),
+            body,
+            moonlight_design::icon_thin(
+                if openness < 0.5 {
+                    Icon::ChevronDown
+                } else {
+                    Icon::ChevronUp
+                },
+                14.0,
+                palette.text_muted,
+                2.4,
+            ),
+        ]
+        .spacing(11)
+        .align_y(Alignment::Start),
+    )
+    .on_press(toggle)
+    .padding([12, 15])
+    .width(Length::Fill)
+    .style(move |_, status| {
+        let rim = match status {
+            button::Status::Hovered | button::Status::Pressed => theme::alpha(palette.text, 0.22),
+            _ => palette.hairline,
+        };
+        button::Style {
+            background: Some(Background::Color(palette.surface2)),
+            text_color: palette.text,
+            border: Border {
+                radius: iced::border::Radius::from(radii::ROW),
+                width: 1.0,
+                color: rim,
+            },
+            shadow: theme::lift(palette, 10.0),
+            ..Default::default()
+        }
+    })
+    .into()
+}
+
+/// The announcement's type, its line, and what of the banner's width is not
+/// text: its padding, its two glyphs and the gaps beside them.
+const ANNOUNCE_TYPE: f32 = 13.0;
+const ANNOUNCE_LINE: f32 = 18.0;
+const ANNOUNCE_CHROME: f32 = 82.0;
+
+/// How many lines the message takes in `room` pixels of width — near enough
+/// to move to. Erring on the side of more: a line too many only ends the
+/// movement a moment early, a line too few would cut the message short until
+/// it had finished.
+fn announce_lines(message: &str, room: f32) -> f32 {
+    // An average glyph of this face at this size, Cyrillic included.
+    const ADVANCE: f32 = 7.4;
+    let fit = (room / ADVANCE).floor().max(8.0);
+    message
+        .split('\n')
+        .map(|line| (line.chars().count() as f32 / fit).ceil().max(1.0))
+        .sum()
+}
+
+/// What a folded announcement shows: its first line, cut where a banner as
+/// narrow as the tray's would cut it, and marked when there is more.
+pub fn announce_headline(message: &str) -> String {
+    const ROOM: usize = 38;
+    let mut lines = message.lines().map(str::trim).filter(|l| !l.is_empty());
+    let first = lines.next().unwrap_or_default();
+    let more = lines.next().is_some();
+    if first.chars().count() > ROOM {
+        let cut: String = first.chars().take(ROOM).collect();
+        format!("{}…", cut.trim_end())
+    } else if more {
+        format!("{first} …")
+    } else {
+        first.to_string()
+    }
+}
+
+/// A note at the foot of the window: what just happened, or what did not and
+/// why. The macOS client's toast — a card of its own, floating over the page,
+/// with the outcome's glyph on a disc of its own colour. Pressing it puts it
+/// away; otherwise it goes by itself.
+pub fn note<'a, M: Clone + 'a>(
+    good: bool,
+    title: &'a str,
+    detail: &'a str,
     dismiss: M,
     palette: Palette,
 ) -> Element<'a, M> {
-    let close = button(icon(Icon::X, 14.0, palette.text_muted))
-        .on_press(dismiss)
-        .padding(4)
-        .style(move |_, status| theme::row_button(palette, false, status));
-    container(
-        row![
-            icon(Icon::MessageCircle, 17.0, palette.accent_ink),
-            text(message)
-                .size(13.0)
-                .font(moonlight_design::ui(EMPHATIC))
-                .color(palette.text)
-                .width(Length::Fill),
-            close,
-        ]
-        .spacing(12)
-        .align_y(Alignment::Start),
-    )
-    .padding([13, 16])
-    .width(Length::Fill)
-    .style(move |_| container::Style {
-        background: Some(Background::Color(palette.accent_quiet)),
-        border: Border {
-            radius: iced::border::Radius::from(radii::CARD),
+    let (glyph, weight, tone) = if good {
+        (Icon::Check, 2.6, palette.st_up_ink)
+    } else {
+        (Icon::CircleAlert, 2.2, palette.danger)
+    };
+    let mark = container(moonlight_design::icon_thin(glyph, 15.0, tone, weight))
+        .center(Length::Fixed(30.0))
+        .style(move |_| container::Style {
+            background: Some(Background::Color(theme::alpha(tone, 0.14))),
+            border: Border {
+                radius: iced::border::Radius::from(radii::PILL),
+                ..Default::default()
+            },
             ..Default::default()
-        },
-        ..Default::default()
-    })
-    .into()
+        });
+    let mut words = column![text(title)
+        .size(13.5)
+        .font(moonlight_design::ui(EMPHATIC))
+        .color(palette.text)]
+    .spacing(1);
+    if !detail.is_empty() {
+        words = words.push(text(detail).size(12.0).color(palette.text_muted));
+    }
+    button(row![mark, words].spacing(12).align_y(Alignment::Center))
+        .on_press(dismiss)
+        .padding(iced::Padding {
+            top: 9.0,
+            right: 20.0,
+            bottom: 9.0,
+            left: 9.0,
+        })
+        .style(move |_, status| {
+            // Solid: it sits over whatever the page has at its foot, which
+            // must not show through its words.
+            let card = theme::floating(palette, 24.0);
+            button::Style {
+                background: card.background,
+                text_color: palette.text,
+                border: Border {
+                    color: match status {
+                        button::Status::Hovered | button::Status::Pressed => {
+                            theme::alpha(palette.text, 0.22)
+                        }
+                        _ => palette.hairline,
+                    },
+                    ..card.border
+                },
+                shadow: card.shadow,
+                ..Default::default()
+            }
+        })
+        .into()
 }
 
 /// One line for a problem, in the danger colour.
@@ -650,6 +808,32 @@ mod tests {
         let empty = (0.0_f32 * 1000.0) as u16;
         assert_eq!(empty, 0);
         assert_eq!(1000_u16.saturating_sub(empty), 1000);
+    }
+
+    #[test]
+    fn a_folded_announcement_is_its_first_line_and_says_when_there_is_more() {
+        assert_eq!(announce_headline("all good"), "all good");
+        assert_eq!(announce_headline("first\n\nsecond"), "first …");
+        let long = announce_headline(&"я".repeat(80));
+        assert_eq!(long.chars().count(), 39, "cut by characters, not bytes");
+        assert!(long.ends_with('…'));
+        assert_eq!(announce_headline(""), "");
+    }
+
+    #[test]
+    fn an_announcement_is_measured_by_its_lines_and_how_they_wrap() {
+        assert_eq!(announce_lines("short", 400.0), 1.0);
+        // Its own line breaks count, empty lines included.
+        assert_eq!(announce_lines("one\n\nthree", 400.0), 3.0);
+        // A line too long for the room wraps, and a narrower room wraps more.
+        let long = "x".repeat(100);
+        assert_eq!(announce_lines(&long, 400.0), 2.0);
+        assert!(announce_lines(&long, 200.0) > announce_lines(&long, 400.0));
+    }
+
+    #[test]
+    fn a_row_in_a_group_is_inset_as_far_as_the_cards_own_padding() {
+        assert_eq!(GROUP_PADDING + ROW_INSET, SURFACE_PADDING);
     }
 
     #[test]

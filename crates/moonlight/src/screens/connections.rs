@@ -323,14 +323,14 @@ fn heading(palette: Palette, locale: AppLocale) -> Element<'static, Message> {
     container(
         row![
             container(components::overline(t(S::ColProcess, locale), palette)).width(Length::Fill),
-            cell("ЦЕПОЧКА", CHAIN, false),
-            cell("ПРАВИЛО", RULE, false),
-            cell("СЕТЬ", NET, false),
+            cell(t(S::ColChain, locale), CHAIN, false),
+            cell(t(S::ColRule, locale), RULE, false),
+            cell(t(S::ColNetwork, locale), NET, false),
             // Numbers are read by their last digit, so they align right — and so
             // do their headings.
             cell(t(S::Downloaded, locale), BYTES, true),
             cell(t(S::Uploaded, locale), BYTES, true),
-            cell("ВРЕМЯ", TIME, true),
+            cell(t(S::ColTime, locale), TIME, true),
             hspace(Length::Fixed(CLOSE)),
         ]
         .spacing(10)

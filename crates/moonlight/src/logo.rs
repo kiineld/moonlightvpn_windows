@@ -31,31 +31,39 @@ pub struct Logo {
     /// The slab's corner radius, in the *rendered* size — 10 at 32pt in the
     /// sidebar.
     radius: f32,
-    cache: Cache,
 }
 
 impl Logo {
     pub fn with_radius(palette: Palette, radius: f32) -> Self {
-        Logo {
-            palette,
-            radius,
-            cache: Cache::new(),
-        }
+        Logo { palette, radius }
     }
 }
 
+/// The drawing, and the radius it was drawn at. In the widget's state, which
+/// outlives a redraw; held in the `Logo` it was thrown away with every frame.
+#[derive(Default)]
+pub struct Drawn {
+    cache: Cache,
+    radius: std::cell::Cell<u32>,
+}
+
 impl<Message> canvas::Program<Message> for Logo {
-    type State = ();
+    type State = Drawn;
 
     fn draw(
         &self,
-        _state: &Self::State,
+        state: &Self::State,
         renderer: &Renderer,
         _theme: &Theme,
         bounds: Rectangle,
         _cursor: mouse::Cursor,
     ) -> Vec<Geometry> {
-        let geometry = self.cache.draw(renderer, bounds.size(), |frame| {
+        // The brand's colours are the same in both themes, so the radius is
+        // all that can change under the same size.
+        if state.radius.replace(self.radius.to_bits()) != self.radius.to_bits() {
+            state.cache.clear();
+        }
+        let geometry = state.cache.draw(renderer, bounds.size(), |frame| {
             let size = frame.width().min(frame.height());
             if size <= 0.0 {
                 return;

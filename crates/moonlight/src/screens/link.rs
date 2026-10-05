@@ -6,7 +6,7 @@
 //! replace the current subscription or update it — and never shows the link.
 
 use iced::widget::{button, canvas, column, container, opaque, row, text};
-use iced::{Alignment, Background, Border, Color, Element, Length};
+use iced::{Alignment, Background, Color, Element, Length};
 
 use moonlight_core::subscription;
 use moonlight_design::motion::radii;
@@ -130,15 +130,7 @@ pub fn view<'a>(app: &'a Moonlight, prompt: &'a LinkPrompt) -> Element<'a, Messa
 
     let card = container(content)
         .width(Length::Fixed(460.0))
-        .style(move |_| container::Style {
-            background: Some(Background::Color(palette.surface)),
-            border: Border {
-                radius: iced::border::Radius::from(radii::PANEL),
-                width: 1.0,
-                color: palette.hairline,
-            },
-            ..Default::default()
-        });
+        .style(move |_| theme::floating(palette, radii::PANEL));
 
     // Opaque, so nothing under the question can be clicked while it is asked.
     opaque(

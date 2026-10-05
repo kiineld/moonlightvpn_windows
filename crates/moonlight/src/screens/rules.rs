@@ -5,7 +5,7 @@
 //! changes — one rule it refuses would otherwise take the whole config, and the
 //! tunnel, down with it.
 
-use iced::widget::{button, column, container, mouse_area, row, text, text_input};
+use iced::widget::{button, column, container, mouse_area, row, scrollable, text, text_input};
 use iced::{Alignment, Background, Border, Element, Length};
 
 use moonlight_core::rules::{self, Priority, ProfileRule, RoutingRule};
@@ -20,6 +20,13 @@ use crate::{components, hspace, theme, Message, Moonlight, RulesTab};
 /// Every row is this tall, which is what lets a drag turn its distance into a
 /// number of places moved.
 pub const ROW_HEIGHT: f32 = 52.0;
+
+/// A row of the subscription's rules, and that list's scroller.
+const PROFILE_ROW: f32 = 44.0;
+pub const PROFILE_SCROLL: &str = "profile-rules";
+/// Rows built beyond the ones in view, either side, so a fast scroll does
+/// not outrun them.
+const OVERSCAN: usize = 12;
 
 const HANDLE: f32 = 22.0;
 const TYPE_WIDTH: f32 = 196.0;
@@ -92,9 +99,7 @@ pub fn view(app: &Moonlight) -> Element<'_, Message> {
     if tab == RulesTab::Mine && (app.rules_dirty() || app.rules_applying()) {
         page = page.push(apply_bar(app));
     }
-    if let Some(issue) = app.rules_issue() {
-        page = page.push(components::issue_line(issue.to_string(), palette));
-    }
+
     page.push(match tab {
         RulesTab::Mine => mine(app),
         RulesTab::Subscription => profile(app),
@@ -196,8 +201,10 @@ fn kind_chip<'a>(label: String, app: &Moonlight, dim: bool) -> Element<'a, Messa
             }),
     )
     .padding([4, 8])
+    // A wash of the text colour, not the glass: a chip on a white card is
+    // white glass on white, and would not be there.
     .style(move |_| container::Style {
-        background: Some(Background::Color(palette.surface2)),
+        background: Some(Background::Color(theme::alpha(palette.text, 0.07))),
         border: Border {
             radius: iced::border::Radius::from(radii::CHIP),
             ..Default::default()
@@ -230,15 +237,12 @@ fn mine(app: &Moonlight) -> Element<'_, Message> {
     let can_drag = filter.trim().is_empty();
     let dragging = app.dragging_rule();
 
-    let mut list = column![
-        header(app, HANDLE + 12.0 + 44.0),
-        components::divider(palette)
-    ];
+    let mut rows = column![];
     for (index, rule) in rules.iter().enumerate() {
         if !matches(filter, [rule.kind.token(), &rule.value, &rule.target]) {
             continue;
         }
-        list = list.push(rule_row(
+        rows = rows.push(rule_row(
             app,
             rule,
             index,
@@ -246,7 +250,32 @@ fn mine(app: &Moonlight) -> Element<'_, Message> {
             dragging == Some(rule.id),
         ));
     }
-    container(list).style(move |_| theme::panel(palette)).into()
+    // The rows scroll inside their card, under a heading that stays, as the
+    // subscription's do. Both tabs are then the same page with a different
+    // list in it — and the switch between them is the same switch throughout,
+    // which is what lets its capsule glide across rather than be drawn anew
+    // on the other side. As tall as its rows, and no taller than the page.
+    let list = scrollable(rows.padding(iced::Padding {
+        right: crate::SCROLLBAR_GUTTER,
+        ..iced::Padding::ZERO
+    }))
+    .direction(scrollable::Direction::Vertical(
+        scrollable::Scrollbar::new()
+            .width(crate::SCROLLBAR_WIDTH)
+            .scroller_width(crate::SCROLLBAR_WIDTH)
+            .margin(crate::SCROLLBAR_MARGIN),
+    ))
+    .width(Length::Fill)
+    .height(Length::Shrink)
+    .style(move |theme, _| theme::scroller(palette, theme));
+
+    container(column![
+        header(app, HANDLE + 12.0 + 44.0),
+        components::divider(palette),
+        list
+    ])
+    .style(move |_| theme::panel(palette))
+    .into()
 }
 
 fn rule_row<'a>(
@@ -331,7 +360,9 @@ fn rule_row<'a>(
         .height(Length::Fixed(ROW_HEIGHT))
         .center_y(Length::Fixed(ROW_HEIGHT))
         .style(move |_| container::Style {
-            background: lifted.then_some(Background::Color(palette.surface2)),
+            // Solid while it is carried, so the rows it passes over do not
+            // show through it.
+            background: lifted.then_some(Background::Color(palette.raised)),
             ..Default::default()
         })
         .into()
@@ -346,18 +377,30 @@ fn profile(app: &Moonlight) -> Element<'_, Message> {
             palette,
         );
     }
-    let mut list = column![header(app, 0.0), components::divider(palette)];
-    for line in app.profile_rules() {
+    // A subscription carries thousands of these. Built all at once they took
+    // seconds to lay out, so only the rows in view are built — every row is
+    // the same height, which is what lets the rest be two empty spaces.
+    //
+    // ponytail: the filter runs over every line each frame while it is set.
+    // Keep the matches between frames if a subscription ever ships tens of
+    // thousands of rules.
+    let filter = app.rules_filter().trim().to_lowercase();
+    let shown: Vec<&String> = app
+        .profile_rules()
+        .iter()
+        .filter(|line| filter.is_empty() || line.to_lowercase().contains(&filter))
+        .collect();
+    let (first, last) = window(app.rules_scroll(), shown.len());
+
+    let mut rows = column![crate::vspace(Length::Fixed(first as f32 * PROFILE_ROW))];
+    for line in &shown[first..last] {
         let rule = ProfileRule::parse(line);
-        if !matches(app.rules_filter(), [&rule.kind, &rule.value, &rule.target]) {
-            continue;
-        }
         let target_color = if rule.target.eq_ignore_ascii_case(rules::REJECT) {
             palette.danger
         } else {
             palette.text2
         };
-        list = list.push(
+        rows = rows.push(
             container(
                 row![
                     container(kind_chip(rule.kind, app, false)).width(Length::Fixed(TYPE_WIDTH)),
@@ -365,19 +408,95 @@ fn profile(app: &Moonlight) -> Element<'_, Message> {
                         .font(moonlight_design::mono())
                         .size(13.5)
                         .color(palette.text)
+                        .wrapping(iced::widget::text::Wrapping::None)
                         .width(Length::Fill),
                     text(rule.target)
                         .size(13.5)
                         .font(moonlight_design::ui(EMPHATIC))
                         .color(target_color)
+                        .wrapping(iced::widget::text::Wrapping::None)
                         .width(Length::Fixed(TARGET_WIDTH + PRIORITY_WIDTH + 12.0)),
                 ]
                 .spacing(12)
                 .align_y(Alignment::Center),
             )
             .padding([0, 16])
-            .center_y(Length::Fixed(44.0)),
+            .height(Length::Fixed(PROFILE_ROW))
+            .center_y(Length::Fixed(PROFILE_ROW))
+            .clip(true),
         );
     }
-    container(list).style(move |_| theme::panel(palette)).into()
+    rows = rows.push(crate::vspace(Length::Fixed(
+        (shown.len() - last) as f32 * PROFILE_ROW,
+    )));
+
+    let list = scrollable(rows.padding(iced::Padding {
+        right: crate::SCROLLBAR_GUTTER,
+        ..iced::Padding::ZERO
+    }))
+    .id(PROFILE_SCROLL)
+    .on_scroll(Message::RulesScrolled)
+    .direction(scrollable::Direction::Vertical(
+        scrollable::Scrollbar::new()
+            .width(crate::SCROLLBAR_WIDTH)
+            .scroller_width(crate::SCROLLBAR_WIDTH)
+            .margin(crate::SCROLLBAR_MARGIN),
+    ))
+    .width(Length::Fill)
+    .height(Length::Fill)
+    .style(move |theme, _| theme::scroller(palette, theme));
+
+    container(column![
+        header(app, 0.0),
+        components::divider(palette),
+        list
+    ])
+    .height(Length::Fill)
+    .style(move |_| theme::panel(palette))
+    .into()
+}
+
+/// Which rows to build, of `total`: the ones in view and a margin either side.
+/// The room's height is unknown until the list first reports it; until then a
+/// tall window's worth is built.
+fn window((offset, height): (f32, f32), total: usize) -> (usize, usize) {
+    let height = if height > 0.0 { height } else { 1400.0 };
+    let first = ((offset / PROFILE_ROW).floor().max(0.0) as usize)
+        .saturating_sub(OVERSCAN)
+        .min(total);
+    let last = (first + (height / PROFILE_ROW).ceil() as usize + 2 * OVERSCAN).min(total);
+    (first, last)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn only_the_rows_in_view_are_built_however_many_there_are() {
+        // At the head of five thousand: a screenful and its margin.
+        let (first, last) = window((0.0, 600.0), 5000);
+        assert_eq!(first, 0);
+        assert!(last < 60, "{last} rows built for a 600px room");
+        // Scrolled well down: the same number, around where it is.
+        let (first, last) = window((44_000.0, 600.0), 5000);
+        assert!(first <= 1000 && last > 1000);
+        assert!(last - first < 60);
+    }
+
+    #[test]
+    fn the_window_never_runs_past_the_list() {
+        assert_eq!(window((0.0, 600.0), 0), (0, 0));
+        assert_eq!(window((0.0, 600.0), 3), (0, 3));
+        // Scrolled further than a list the filter has just shortened.
+        let (first, last) = window((90_000.0, 600.0), 10);
+        assert_eq!((first, last), (10, 10));
+    }
+
+    #[test]
+    fn a_room_not_yet_measured_gets_a_tall_windows_worth() {
+        let (first, last) = window((0.0, 0.0), 5000);
+        assert_eq!(first, 0);
+        assert!(last >= 32);
+    }
 }

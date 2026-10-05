@@ -40,6 +40,7 @@ instance() {
 
 variable "$base/onest/Onest%5Bwght%5D.ttf"         "Onest[wght].ttf"
 variable "$base/unbounded/Unbounded%5Bwght%5D.ttf" "Unbounded[wght].ttf"
+variable "$base/jetbrainsmono/JetBrainsMono%5Bwght%5D.ttf" "JetBrainsMono[wght].ttf"
 
 # 500 is the lightest body weight, 700 a row title, 800 anything emphatic.
 instance "Onest[wght].ttf"     500 Onest-Medium.ttf
@@ -47,5 +48,7 @@ instance "Onest[wght].ttf"     700 Onest-Bold.ttf
 instance "Onest[wght].ttf"     800 Onest-ExtraBold.ttf
 # Unbounded is display only, and the design sets it at 800 everywhere.
 instance "Unbounded[wght].ttf" 800 Unbounded-ExtraBold.ttf
+# The mono face: figures, the log, rule values. One weight, the body's own.
+instance "JetBrainsMono[wght].ttf" 500 JetBrainsMono-Medium.ttf
 
 ls -la resources/fonts

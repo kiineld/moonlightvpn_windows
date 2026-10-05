@@ -18,13 +18,13 @@ use crate::{
 pub fn view(app: &Moonlight) -> Element<'_, Message> {
     row![
         column![tunnel(app), system(app)]
-            .spacing(16)
+            .spacing(22)
             .width(Length::FillPortion(1)),
         column![application(app), support(app), about(app)]
-            .spacing(16)
+            .spacing(22)
             .width(Length::FillPortion(1)),
     ]
-    .spacing(20)
+    .spacing(16)
     .into()
 }
 
@@ -42,7 +42,7 @@ fn tunnel(app: &Moonlight) -> Element<'_, Message> {
             mode == TunnelMode::SystemProxy,
             true,
         ),
-        components::divider(palette),
+        components::row_divider(palette),
         mode_row(
             app,
             TunnelMode::Tun,
@@ -53,7 +53,7 @@ fn tunnel(app: &Moonlight) -> Element<'_, Message> {
             // rather than accepting a choice that fails on every connect.
             app.helper_installed(),
         ),
-        components::divider(palette),
+        components::row_divider(palette),
     ]
     .spacing(0);
 
@@ -95,29 +95,13 @@ fn tunnel(app: &Moonlight) -> Element<'_, Message> {
         palette,
     ));
 
-    let mut section = column![
-        components::overline(t(S::SectionTunnel, locale), palette),
-        vspace(Length::Fixed(12.0)),
-        components::surface(panel, palette),
-    ];
-
-    // A refused UAC prompt, or a missing moonlight-helper.exe, has to say so
-    // *here* — beside the button that failed. The connect screen carries the
-    // tunnel's errors, and a user who pressed Установить службу never goes
-    // looking there for the reason nothing happened.
-    if let Some(error) = app.last_error() {
-        section = section.push(vspace(Length::Fixed(10.0)));
-        section = section.push(
-            container(
-                text(error.to_string())
-                    .size(scale::META)
-                    .color(palette.danger),
-            )
-            .padding([0, 4]),
-        );
-    }
-
-    section.into()
+    // A refused UAC prompt, or a missing moonlight-helper.exe, says so in the
+    // note at the foot of the window, like everything else that fails.
+    column![
+        section_title(t(S::SectionTunnel, locale), palette),
+        components::group(panel, palette),
+    ]
+    .into()
 }
 
 /// A radio row. The mark is drawn rather than using iced's radio, because that
@@ -186,7 +170,7 @@ fn mode_row<'a>(
 
     button(content)
         .on_press_maybe(enabled.then_some(Message::SetMode(mode)))
-        .padding([14, 16])
+        .padding([13.0, components::ROW_INSET])
         .width(Length::Fill)
         .style(move |_, status| theme::row_button(palette, false, status))
         .into()
@@ -212,7 +196,7 @@ fn system(app: &Moonlight) -> Element<'_, Message> {
             ),
             palette,
         ),
-        components::divider(palette),
+        components::row_divider(palette),
         components::setting_row(
             t(S::Notifications, locale).to_string(),
             Some(t(S::NotificationsNote, locale).to_string()),
@@ -223,14 +207,13 @@ fn system(app: &Moonlight) -> Element<'_, Message> {
             ),
             palette,
         ),
-        components::divider(palette),
+        components::row_divider(palette),
         auto_update(app),
     ];
 
     column![
-        components::overline(t(S::SectionSystem, locale), palette),
-        vspace(Length::Fixed(12.0)),
-        components::surface(panel, palette),
+        section_title(t(S::SectionSystem, locale), palette),
+        components::group(panel, palette),
     ]
     .into()
 }
@@ -264,8 +247,19 @@ fn auto_update(app: &Moonlight) -> Element<'_, Message> {
         components::segmented(&options, hours, Message::SetAutoUpdate, palette),
     ]
     .spacing(2)
-    .padding([15, 18])
+    .padding([14.0, components::ROW_INSET])
     .into()
+}
+
+/// A group's heading, as far in as the rows' own text under it.
+fn section_title<'a>(label: &'a str, palette: moonlight_design::Palette) -> Element<'a, Message> {
+    container(components::overline(label, palette))
+        .padding(iced::Padding {
+            left: components::SURFACE_PADDING,
+            bottom: 10.0,
+            ..iced::Padding::ZERO
+        })
+        .into()
 }
 
 fn application(app: &Moonlight) -> Element<'_, Message> {
@@ -294,7 +288,7 @@ fn application(app: &Moonlight) -> Element<'_, Message> {
 
     let panel = column![
         components::setting_row(t(S::Language, locale).to_string(), None, language, palette),
-        components::divider(palette),
+        components::row_divider(palette),
         components::setting_row(
             t(S::Appearance, locale).to_string(),
             None,
@@ -304,9 +298,8 @@ fn application(app: &Moonlight) -> Element<'_, Message> {
     ];
 
     column![
-        components::overline(t(S::SectionApp, locale), palette),
-        vspace(Length::Fixed(12.0)),
-        components::surface(panel, palette),
+        section_title(t(S::SectionApp, locale), palette),
+        components::group(panel, palette),
     ]
     .into()
 }
@@ -326,7 +319,7 @@ fn support(app: &Moonlight) -> Element<'_, Message> {
             Some(Message::OpenUrl(TELEGRAM_CHANNEL_URL)),
             palette,
         ),
-        components::divider(palette),
+        components::row_divider(palette),
         components::action_row(
             Icon::Headphones,
             palette.cat4,
@@ -337,7 +330,7 @@ fn support(app: &Moonlight) -> Element<'_, Message> {
             Some(Message::OpenSupport),
             palette,
         ),
-        components::divider(palette),
+        components::row_divider(palette),
         components::action_row(
             Icon::CircleAlert,
             palette.cat3,
@@ -350,13 +343,11 @@ fn support(app: &Moonlight) -> Element<'_, Message> {
         ),
         // Connections is a rail destination now, so a second way in from here
         // would be the same screen listed twice.
-    ]
-    .spacing(2);
+    ];
 
     column![
-        components::overline(t(S::SectionSupport, locale), palette),
-        vspace(Length::Fixed(12.0)),
-        components::surface(panel, palette),
+        section_title(t(S::SectionSupport, locale), palette),
+        components::group(panel, palette),
     ]
     .into()
 }
@@ -420,18 +411,18 @@ fn about(app: &Moonlight) -> Element<'_, Message> {
         control,
     ]
     .align_y(Alignment::Center)
-    .padding([14, 16])];
+    .padding([14.0, components::ROW_INSET])];
 
     if let Some(progress) = progress(app) {
         panel = panel.push(container(progress).padding(iced::Padding {
             top: 0.0,
-            right: 16.0,
+            right: components::ROW_INSET,
             bottom: 14.0,
-            left: 16.0,
+            left: components::ROW_INSET,
         }));
     }
 
-    panel = panel.push(components::divider(palette)).push(
+    panel = panel.push(components::row_divider(palette)).push(
         row![
             icon(Icon::Lock, 15.0, palette.accent_ink),
             text(t(S::KeysStayLocal, locale))
@@ -440,10 +431,10 @@ fn about(app: &Moonlight) -> Element<'_, Message> {
         ]
         .spacing(8)
         .align_y(Alignment::Center)
-        .padding([12, 16]),
+        .padding([12.0, components::ROW_INSET]),
     );
 
-    components::surface(panel, palette)
+    components::group(panel, palette)
 }
 
 /// "Загружаем moonlight 0.12.0", a bar, "12,3 МБ из 36,6 МБ", and what the

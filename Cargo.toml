@@ -22,6 +22,11 @@ iced = { version = "0.14", default-features = false, features = [
     "image",
     "tokio",
     "advanced",
+    # Blend in sRGB, as the design's tools and the macOS client do. Without it
+    # the renderer blends in linear light, where a 10% white hairline over
+    # black comes out at a third grey and a 10% black one over white all but
+    # vanishes — every wash and hairline in the palette at the wrong weight.
+    "web-colors",
 ] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

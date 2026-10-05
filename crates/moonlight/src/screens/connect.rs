@@ -16,7 +16,7 @@ use moonlight_design::{icon, Icon};
 use crate::components;
 use crate::localization::{t, S};
 use crate::moon::Moon;
-use crate::{hspace, localization, theme, vspace, Message, Moonlight, Page};
+use crate::{hspace, theme, vspace, Message, Moonlight, Page};
 
 /// The moon with the list open; closed it is twice this.
 const MOON: f32 = 92.0;
@@ -61,22 +61,10 @@ pub fn view(app: &Moonlight) -> Element<'_, Message> {
         page = page.push(spacer(1.0 - open));
     }
 
-    let page = container(page.max_width(COLUMN).height(Length::Fill))
+    container(page.max_width(COLUMN).height(Length::Fill))
         .center_x(Length::Fill)
-        .height(Length::Fill);
-
-    // Over the page rather than in it, so its arrival moves nothing; at the
-    // foot, where it covers neither the time nor the moon.
-    match refresh_note(app) {
-        Some(note) => iced::widget::stack![
-            page,
-            container(note)
-                .center_x(Length::Fill)
-                .align_bottom(Length::Fill),
-        ]
-        .into(),
-        None => page.into(),
-    }
+        .height(Length::Fill)
+        .into()
 }
 
 /// A share of the free height as a fill portion. Never zero: a zero portion
@@ -157,7 +145,7 @@ fn moon(app: &Moonlight, side: f32) -> Element<'_, Message> {
                 .color(palette.text),
         )
         .padding([6, 10])
-        .style(move |_| theme::panel(palette)),
+        .style(move |_| theme::floating(palette, radii::ICON)),
         tooltip::Position::Bottom,
     )
     .into()
@@ -167,8 +155,6 @@ fn moon(app: &Moonlight, side: f32) -> Element<'_, Message> {
 /// and the servers.
 fn below_moon(app: &Moonlight) -> Element<'_, Message> {
     let palette = app.palette_of();
-    let locale = app.locale_of();
-    let state = app.state();
 
     let mut below = column![
         vspace(Length::Fixed(18.0)),
@@ -179,35 +165,16 @@ fn below_moon(app: &Moonlight) -> Element<'_, Message> {
     .align_x(Alignment::Center)
     .width(Length::Fill);
 
-    // Why it is not connected — a failed connect first; failing that, why the
-    // subscription did not load. Not while the refresh note is saying the
-    // same thing.
-    let problem = app.last_error().map(str::to_string).or_else(|| {
-        app.refresh_note()
-            .is_none()
-            .then(|| {
-                app.refresh_issue()
-                    .map(|issue| localization::issue(issue, locale))
-            })
-            .flatten()
-    });
-    if let Some(problem) = problem.filter(|_| !state.is_connected()) {
-        below = below.push(vspace(Length::Fixed(14.0))).push(
-            container(
-                text(problem)
-                    .size(scale::META)
-                    .color(palette.danger)
-                    .align_x(Alignment::Center),
-            )
-            .max_width(440),
-        );
-    }
+    // Why it is not connected is said in the note at the foot of the window,
+    // like every other thing that fails, rather than in a line of red here.
     if let Some(message) = app.announce() {
         below = below
             .push(vspace(Length::Fixed(24.0)))
             .push(components::announce_banner(
                 message,
-                Message::DismissAnnounce,
+                app.announce_openness(),
+                COLUMN,
+                Message::ToggleAnnounce,
                 palette,
             ));
     }
@@ -259,10 +226,12 @@ fn status_pill(app: &Moonlight) -> Element<'_, Message> {
         left: 16.0,
     })
     .style(move |_, status| {
+        // Connected, the glass darkens under the accent's wash, as the macOS
+        // pill does; otherwise it is the plain sheet.
         let fill = if connected {
-            palette.accent_quiet
+            theme::over(theme::alpha(palette.text, 0.14), palette.surface2)
         } else {
-            palette.surface
+            palette.surface2
         };
         let rim = match status {
             button::Status::Hovered | button::Status::Pressed => palette.accent_line,
@@ -276,6 +245,7 @@ fn status_pill(app: &Moonlight) -> Element<'_, Message> {
                 width: border::HAIRLINE,
                 color: rim,
             },
+            shadow: theme::lift(palette, 10.0),
             ..Default::default()
         }
     })
@@ -400,14 +370,7 @@ fn picker(app: &Moonlight) -> Element<'_, Message> {
             row![
                 container(glyph)
                     .center(Length::Fixed(40.0))
-                    .style(move |_| container::Style {
-                        background: Some(iced::Background::Color(palette.surface2)),
-                        border: Border {
-                            radius: iced::border::Radius::from(radii::PILL),
-                            ..Default::default()
-                        },
-                        ..Default::default()
-                    }),
+                    .style(move |_| theme::control(palette, radii::PILL)),
                 column![
                     text(title)
                         .size(14.5)
@@ -443,13 +406,14 @@ fn picker(app: &Moonlight) -> Element<'_, Message> {
             _ => palette.hairline,
         };
         button::Style {
-            background: Some(iced::Background::Color(palette.surface)),
+            background: theme::glass(palette, radii::PILL).background,
             text_color: palette.text,
             border: Border {
                 radius: iced::border::Radius::from(radii::PILL),
                 width: border::HAIRLINE,
                 color: rim,
             },
+            shadow: theme::lift(palette, 18.0),
             ..Default::default()
         }
     })
@@ -514,49 +478,6 @@ fn about(node: &Node, app: &Moonlight) -> String {
         .unwrap_or_else(|| node.subtitle(app.locale_of()))
 }
 
-/// What the refresh the user asked for came to: updated, or not and why.
-/// Refreshing used to turn the glyph and stop, and whether anything had
-/// happened was left to a timestamp on another page. Clicking it puts it away;
-/// otherwise it goes on its own.
-fn refresh_note(app: &Moonlight) -> Option<Element<'_, Message>> {
-    let palette = app.palette_of();
-    let locale = app.locale_of();
-    let (id, outcome) = app.refresh_note()?;
-    let (glyph, tone, title, detail) = match outcome {
-        Ok(()) => (
-            Icon::Check,
-            palette.st_up_ink,
-            t(S::RefreshDone, locale),
-            String::new(),
-        ),
-        Err(issue) => (
-            Icon::CircleAlert,
-            palette.danger,
-            t(S::RefreshFailed, locale),
-            localization::issue(issue, locale),
-        ),
-    };
-    let mut words = column![text(title)
-        .size(13.5)
-        .font(moonlight_design::ui(EMPHATIC))
-        .color(palette.text)]
-    .spacing(1);
-    if !detail.is_empty() {
-        words = words.push(text(detail).size(12.0).color(palette.text_muted));
-    }
-    Some(
-        button(
-            row![moonlight_design::icon(glyph, 15.0, tone), words]
-                .spacing(12)
-                .align_y(Alignment::Center),
-        )
-        .on_press(Message::HideRefreshNote(id))
-        .padding([9, 16])
-        .style(move |_, status| theme::row_button(palette, false, status))
-        .into(),
-    )
-}
-
 /// A round glyph button over the server list, named by its tooltip. Its glyph
 /// becomes the loader while the work runs.
 fn list_action<'a>(
@@ -585,7 +506,7 @@ fn list_action<'a>(
                 .color(palette.text),
         )
         .padding([6, 10])
-        .style(move |_| theme::panel(palette)),
+        .style(move |_| theme::floating(palette, radii::ICON)),
         tooltip::Position::Bottom,
     )
     .into()
@@ -621,11 +542,7 @@ fn auto_row(app: &Moonlight) -> Element<'_, Message> {
             .center(Length::Fixed(36.0))
             .style(move |_| container::Style {
                 background: Some(iced::Background::Color(tile_fill)),
-                border: Border {
-                    radius: iced::border::Radius::from(radii::ICON),
-                    ..Default::default()
-                },
-                ..Default::default()
+                ..theme::control(palette, radii::ICON)
             }),
         column![
             text(t(S::Auto, locale))

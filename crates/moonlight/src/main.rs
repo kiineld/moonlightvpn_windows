@@ -15,6 +15,7 @@ mod screens;
 mod theme;
 
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
@@ -77,12 +78,34 @@ static COMMANDS: OnceLock<tokio::sync::mpsc::UnboundedSender<Command>> = OnceLoc
 
 /// The page's scroller, so an update can bring its progress into view.
 const PAGE_SCROLL: &str = "page";
+/// The log's own scroller, which follows its last line.
+pub const LOG_SCROLL: &str = "log";
 
 /// The most log lines kept in memory.
 ///
 /// A connected core writes steadily, and an unbounded list is a leak measured
 /// in hours rather than a screen that scrolls a long way.
 const LOG_LIMIT: usize = 2_000;
+
+/// Log lines that have arrived and not yet been put in the list.
+///
+/// A line used to be a message of its own, and every message redraws the
+/// window: a connected core writes one for each connection it opens, so a
+/// browser loading a page had the whole interface redrawn dozens of times a
+/// second for a list nobody was looking at. Lines wait here instead, and the
+/// window is only told about them while the log is on screen.
+static LOG_BUFFER: Mutex<Vec<LogEntry>> = Mutex::new(Vec::new());
+static LOG_WATCHED: AtomicBool = AtomicBool::new(false);
+
+fn buffer_log(entry: LogEntry) {
+    if let Ok(mut buffer) = LOG_BUFFER.lock() {
+        buffer.push(entry);
+        if buffer.len() > LOG_LIMIT {
+            let excess = buffer.len() - LOG_LIMIT;
+            buffer.drain(..excess);
+        }
+    }
+}
 
 fn main() -> iced::Result {
     // Every callback below is a `fn` item, and the whole builder is one
@@ -125,6 +148,7 @@ fn main() -> iced::Result {
         .font(moonlight_design::FONT_BYTES[1])
         .font(moonlight_design::FONT_BYTES[2])
         .font(moonlight_design::FONT_BYTES[3])
+        .font(moonlight_design::FONT_BYTES[4])
         .default_font(moonlight_design::ui(moonlight_design::typography::BODY))
         .run()
 }
@@ -243,6 +267,17 @@ impl UpdateState {
     }
 }
 
+/// A note at the foot of the window: what just happened, or what did not and
+/// why. One at a time, on whatever page is showing, and gone by itself.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Note {
+    pub id: u64,
+    /// It worked. Otherwise the note is the reason it did not.
+    pub good: bool,
+    pub title: String,
+    pub detail: String,
+}
+
 /// Which list the rules page shows.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RulesTab {
@@ -320,16 +355,30 @@ pub enum Message {
     AutoUpdateTick,
     /// Hours between automatic refreshes; 0 is off.
     SetAutoUpdate(u32),
-    /// Put the service's current announcement away.
-    DismissAnnounce,
-    /// The refresh note at the foot of the connect page goes, if it is still
-    /// the one with this id.
-    HideRefreshNote(u64),
+    /// Fold the service's current announcement to one line, or open it again.
+    ToggleAnnounce,
+    /// The note at the foot of the window goes, if it is still the one with
+    /// this id.
+    HideNote(u64),
     /// The service's own support contact when it sent one, else the app's.
     OpenSupport,
 
-    /// The tray icon was clicked, at this point on the screen.
-    TrayClicked(moonlight_core::tray::Click),
+    /// The tray icon was clicked, or something chosen from its menu.
+    Tray(moonlight_core::tray::Event),
+    /// Escape, in this window.
+    Escape(iced::window::Id),
+    /// The connect shortcut the moon's tooltip names.
+    Shortcut,
+    /// Lines are waiting in the buffer, and the log is on screen.
+    LogsArrived,
+    /// The log moved: by the reader, or by a line arriving.
+    LogScrolled(iced::widget::scrollable::Viewport),
+    /// The subscription's rules were scrolled: which of them are in view.
+    RulesScrolled(iced::widget::scrollable::Viewport),
+    /// The tray panel is out of sight, so it need not be built.
+    TrayPutAway,
+    /// Take the log to its last line.
+    LogSnap,
     /// A second launch asked for something: `show`, or a link.
     Request(String),
     WindowEvent(iced::window::Id, iced::window::Event),
@@ -449,6 +498,9 @@ pub struct Moonlight {
     drawer: Glide,
     /// The moon: 0 a crescent, 1 full.
     phase: Glide,
+    /// The announcement, while it folds or opens: 0 its first line, 1 all of
+    /// it. At rest the preference says which; this is only the way between.
+    announce: Glide,
     /// TUN was asked for without the helper: Settings puts the install first,
     /// and TUN goes on once it is done.
     tun_awaiting_helper: bool,
@@ -466,11 +518,15 @@ pub struct Moonlight {
     /// Why the last subscription refresh failed, for the subscription page.
     refresh_issue: Option<Issue>,
     /// A refresh the user asked for is in flight, so its outcome is reported
-    /// on the connect page; a scheduled one only goes to the log.
+    /// in a note, on whatever page they are on; a scheduled one only goes to
+    /// the log.
     refresh_asked: bool,
-    /// What the last asked-for refresh came to, shown briefly at the foot of
-    /// the connect page. The id lets a newer note outlive an older's timer.
-    refresh_note: Option<(u64, Result<(), Issue>)>,
+    /// The note at the foot of the window, while there is one.
+    note: Option<Note>,
+    /// When it appeared, for its rise into place.
+    note_at: Option<Instant>,
+    /// How many there have been, which is what tells one from the next.
+    notes: u64,
 
     apps: Vec<AppEntry>,
     /// Executable → the programme's own icon, keyed the same way the app list
@@ -481,13 +537,15 @@ pub struct Moonlight {
     rules_draft: Vec<RoutingRule>,
     rules_tab: RulesTab,
     rules_filter: String,
+    /// How far the subscription's rules are scrolled, and how tall the room
+    /// they scroll in is — which rows to build, of what can be thousands.
+    rules_scroll: (f32, f32),
     rule_editor: Option<RuleEditor>,
     rule_drag: Option<Drag>,
     /// The subscription's groups, which a rule can target, and its own rules.
     routing_groups: Vec<String>,
     profile_rules: Vec<String>,
     rules_applying: bool,
-    rules_issue: Option<String>,
 
     import_field: String,
     /// A subscription is being fetched from the Import screen, and the screen is
@@ -508,6 +566,9 @@ pub struct Moonlight {
     log_level: u8,
     log_source: screens::logs::LogFilter,
     log_filter: String,
+    /// The log keeps its last line in view. Off from the moment the reader
+    /// scrolls back, and on again when they return to the end.
+    log_follow: bool,
     connections: Vec<Connection>,
     /// Which processes have their connections unfolded beneath them. The macOS
     /// client expands in place rather than pushing a second screen, so several
@@ -531,15 +592,26 @@ pub struct Moonlight {
     /// The alpha-2 codes there is a flag picture for, read once from the
     /// `flags/` directory beside the executable. A set rather than a `exists()`
     /// per row per frame.
-    flags: std::collections::HashSet<String>,
+    flags: HashMap<String, iced::widget::image::Handle>,
     /// Off in tests, so preference changes stay in memory.
     persist: bool,
 
     /// The main window, while it is open. Closing it leaves the app in the
     /// tray; `OpenMain` makes a new one.
     main_window: Option<iced::window::Id>,
-    /// The tray panel, while it is open.
+    /// The tray panel. Made once, hidden, and from then on only shown and
+    /// put away — a window made on the click took a visible moment to
+    /// appear, where the notification area's own flyouts are simply there.
     tray_window: Option<iced::window::Id>,
+    /// Whether the panel is on screen.
+    tray_open: bool,
+    /// Whether the panel's contents are built. They are from the moment it is
+    /// asked for until it is out of sight — not merely while `tray_open`, or
+    /// the last thing drawn before it hid would be an empty panel, and that
+    /// is what it would flash on its way back.
+    tray_drawn: bool,
+    /// The panel's handle, so a theme change can re-tint its material.
+    tray_hwnd: Option<isize>,
     /// Whether there is a tray icon at all. Without one, closing the window
     /// must quit, or the app would be left running with no way back to it.
     has_tray: bool,
@@ -592,15 +664,20 @@ impl Moonlight {
         // stream of messages into the app.
         let (outside_tx, outside_rx) = tokio::sync::mpsc::unbounded_channel();
         let _ = OUTSIDE.set(Mutex::new(Some(outside_rx)));
-        if let Some(mut clicks) = moonlight_core::tray::spawn(&app.title_text()) {
+        if let Some(mut events) = moonlight_core::tray::spawn(app.tray_status()) {
             app.has_tray = true;
             let outside = outside_tx.clone();
             tokio::spawn(async move {
-                while let Some(click) = clicks.recv().await {
-                    let _ = outside.send(Message::TrayClicked(click));
+                while let Some(event) = events.recv().await {
+                    let _ = outside.send(Message::Tray(event));
                 }
             });
         }
+        let panel = if app.has_tray {
+            app.make_tray()
+        } else {
+            Task::none()
+        };
         let (request_tx, mut request_rx) = tokio::sync::mpsc::unbounded_channel();
         tokio::spawn(moonlight_core::instance::serve(request_tx));
         tokio::spawn(async move {
@@ -635,6 +712,7 @@ impl Moonlight {
             app,
             Task::batch([
                 window,
+                panel,
                 check,
                 Task::perform(scan_apps(), Message::AppsScanned),
                 // Started, not merely checked: the service is on-demand now, so
@@ -656,6 +734,7 @@ impl Moonlight {
             state: ConnectionState::Disconnected,
             drawer: Glide::at_rest(0.0),
             phase: Glide::at_rest(0.0),
+            announce: Glide::at_rest(1.0),
             tun_awaiting_helper: false,
             nodes: Vec::new(),
             info: SubscriptionInfo::default(),
@@ -669,19 +748,22 @@ impl Moonlight {
             last_error: None,
             refresh_issue: None,
             refresh_asked: false,
-            refresh_note: None,
+            note: None,
+            note_at: None,
+            notes: 0,
             apps: Vec::new(),
             app_icons: std::collections::HashMap::new(),
             running: Vec::new(),
             rules_draft,
             rules_tab: RulesTab::Mine,
             rules_filter: String::new(),
+            rules_scroll: (0.0, 0.0),
             rule_editor: None,
             rule_drag: None,
             routing_groups: Vec::new(),
             profile_rules: Vec::new(),
             rules_applying: false,
-            rules_issue: None,
+
             import_field: String::new(),
             importing: false,
             import_done: false,
@@ -694,6 +776,7 @@ impl Moonlight {
             log_level: 1,
             log_source: screens::logs::LogFilter::default(),
             log_filter: String::new(),
+            log_follow: true,
             connections: Vec::new(),
             expanded_processes: std::collections::HashSet::new(),
             connection_filter: String::new(),
@@ -709,6 +792,9 @@ impl Moonlight {
             persist: true,
             main_window: None,
             tray_window: None,
+            tray_open: false,
+            tray_drawn: false,
+            tray_hwnd: None,
             has_tray: false,
             tray_pinned: false,
             tray_search: String::new(),
@@ -735,6 +821,27 @@ impl Moonlight {
             ConnectionState::Disconnected => t(S::StateDisconnected, self.locale()),
         };
         format!("{APP_NAME} · {state}")
+    }
+
+    /// What the tray icon shows and says: the state in its tooltip and its
+    /// moon, and its menu in the app's language.
+    fn tray_status(&self) -> moonlight_core::tray::Status {
+        let locale = self.locale();
+        let can_toggle = !self.state.is_busy() && self.preferences.subscription_url.is_some();
+        let toggle = if !can_toggle {
+            ""
+        } else if self.state.is_connected() {
+            t(S::DisconnectVerb, locale)
+        } else {
+            t(S::ConnectNow, locale)
+        };
+        moonlight_core::tray::Status {
+            tooltip: self.title_text(),
+            connected: self.state.is_connected(),
+            open: format!("{} {APP_NAME}", t(S::OpenWindow, locale)),
+            toggle: toggle.to_string(),
+            quit: t(S::Quit, locale).to_string(),
+        }
     }
 
     fn clear(&self, _theme: &iced::Theme) -> iced::theme::Style {
@@ -821,6 +928,28 @@ impl Moonlight {
         }
         self.page = page;
         self.page_started = Some(Instant::now());
+        LOG_WATCHED.store(page == Page::Logs, Ordering::Relaxed);
+        if page == Page::Logs {
+            self.take_logs();
+        }
+    }
+
+    /// Brings in the lines that arrived while nobody was reading them.
+    fn take_logs(&mut self) {
+        let Ok(mut buffer) = LOG_BUFFER.lock() else {
+            return;
+        };
+        if buffer.is_empty() {
+            return;
+        }
+        self.logs.append(&mut buffer);
+        drop(buffer);
+        // The app's own lines are written straight to the list and the core's
+        // wait in the buffer, so put the two back on one timeline. Stable, so
+        // lines of the same second keep the order they arrived in.
+        self.logs.sort_by_key(|line| line.at);
+        let excess = self.logs.len().saturating_sub(LOG_LIMIT);
+        self.logs.drain(..excess);
     }
 
     /// The sidebar selection's top and bottom edges, in rows: level once it
@@ -871,8 +1000,10 @@ impl Moonlight {
             || running(self.sidebar_started, spring::SETTLE)
             || running(self.rail_moved.map(|(_, _, at)| at), spring::SETTLE)
             || running(self.theme_started, spring::SETTLE)
+            || running(self.note_at, spring::SETTLE)
             || self.drawer.moving()
             || self.phase.moving()
+            || self.announce.moving()
     }
 
     fn update(&mut self, message: Message) -> Task<Message> {
@@ -885,6 +1016,9 @@ impl Moonlight {
                     if page != Page::Import {
                         self.importing = false;
                         self.import_done = false;
+                    }
+                    if page == Page::Logs {
+                        return self.follow_log();
                     }
                 }
             }
@@ -913,6 +1047,13 @@ impl Moonlight {
                         self.is_dark(),
                     );
                 }
+                if let Some(hwnd) = self.tray_hwnd.filter(|_| self.tray_backdrop) {
+                    moonlight_core::backdrop::apply(
+                        hwnd,
+                        moonlight_core::backdrop::Material::Acrylic,
+                        self.is_dark(),
+                    );
+                }
                 self.theme_started = Some(Instant::now());
                 self.save();
             }
@@ -924,6 +1065,7 @@ impl Moonlight {
                     // up, which read as the window jumping.
                     self.preferences.locale = locale;
                     self.save();
+                    moonlight_core::tray::update(self.tray_status());
                 }
             }
             Message::ToggleLaunchAtLogin => {
@@ -935,7 +1077,9 @@ impl Moonlight {
                     self.preferences.launch_at_login = wanted;
                     self.save();
                 } else {
-                    self.last_error = Some(t(S::AutostartFailed, self.locale()).to_string());
+                    let why = t(S::AutostartFailed, self.locale()).to_string();
+                    self.last_error = Some(why.clone());
+                    return self.notify(false, S::NoteProblem, why);
                 }
             }
 
@@ -972,17 +1116,27 @@ impl Moonlight {
                 self.save();
                 send(Command::SetAutoUpdate(hours));
             }
-            Message::DismissAnnounce => {
-                self.preferences.dismissed_announce = self.info.announce.clone();
+            Message::ToggleAnnounce => {
+                // From wherever it is now, so pressing it again mid-way turns
+                // it round rather than jumping to an end first.
+                let from = self.announce_openness();
+                // The stored field keeps its name — it is in preferences
+                // already on disk — and now names the message that is folded.
+                self.preferences.dismissed_announce = if self.announce_folded() {
+                    None
+                } else {
+                    self.info.announce.clone()
+                };
+                self.announce = Glide {
+                    from,
+                    to: if self.announce_folded() { 0.0 } else { 1.0 },
+                    started: Some(Instant::now()),
+                };
                 self.save();
             }
-            Message::HideRefreshNote(id) => {
-                if self
-                    .refresh_note
-                    .as_ref()
-                    .is_some_and(|(shown, _)| *shown == id)
-                {
-                    self.refresh_note = None;
+            Message::HideNote(id) => {
+                if self.note.as_ref().is_some_and(|shown| shown.id == id) {
+                    self.note = None;
                 }
             }
             Message::OpenSupport => {
@@ -1031,8 +1185,34 @@ impl Moonlight {
                 self.save();
                 send(Command::SetMode(mode));
             }
-            Message::RulesTab(tab) => self.rules_tab = tab,
-            Message::RulesFilter(value) => self.rules_filter = value,
+            Message::RulesTab(tab) => {
+                self.rules_tab = tab;
+                self.rules_scroll = (0.0, 0.0);
+            }
+            Message::RulesFilter(value) => {
+                self.rules_filter = value;
+                // A different set of rules starts at its head; the rows are
+                // built from where the list says it is scrolled to.
+                self.rules_scroll.0 = 0.0;
+                return iced::widget::operation::snap_to(
+                    screens::rules::PROFILE_SCROLL,
+                    iced::widget::scrollable::RelativeOffset::START,
+                );
+            }
+            Message::RulesScrolled(viewport) => {
+                self.rules_scroll = (viewport.absolute_offset().y, viewport.bounds().height);
+            }
+            Message::LogsArrived => {
+                self.take_logs();
+                if self.page == Page::Logs && self.log_follow {
+                    return iced::widget::operation::snap_to_end(LOG_SCROLL);
+                }
+            }
+            Message::TrayPutAway => {
+                if !self.tray_open {
+                    self.tray_drawn = false;
+                }
+            }
             Message::RuleNew => {
                 self.rule_editor = Some(RuleEditor {
                     editing: None,
@@ -1067,11 +1247,9 @@ impl Moonlight {
             Message::RuleDelete(id) => self.rules_draft.retain(|r| r.id != id),
             Message::RulesReset => {
                 self.rules_draft = self.preferences.routing_rules.clone();
-                self.rules_issue = None;
             }
             Message::RulesApply => {
                 self.rules_applying = true;
-                self.rules_issue = None;
                 send(Command::ApplyRules(self.rules_draft.clone()));
             }
             Message::EditorKind(kind) => {
@@ -1213,6 +1391,7 @@ impl Moonlight {
                 return Task::perform(install_helper(false), Message::HelperAttempted)
             }
             Message::HelperAttempted(result) => {
+                let mut said = Task::none();
                 let installed = match result {
                     Ok(installed) => {
                         self.last_error = None;
@@ -1223,11 +1402,16 @@ impl Moonlight {
                             HELPER_MISSING => S::HelperMissingBinary,
                             _ => S::HelperInstallFailed,
                         };
-                        self.last_error = Some(t(key, self.locale()).to_string());
+                        // A refused UAC prompt, or a missing helper binary,
+                        // has to say so — the button would otherwise seem to
+                        // have done nothing.
+                        let why = t(key, self.locale()).to_string();
+                        self.last_error = Some(why.clone());
+                        said = self.notify(false, S::NoteProblem, why);
                         self.helper_installed
                     }
                 };
-                return self.update(Message::HelperChanged(installed));
+                return Task::batch([said, self.update(Message::HelperChanged(installed))]);
             }
             Message::HelperChanged(installed) => {
                 self.helper_installed = installed;
@@ -1362,10 +1546,52 @@ impl Moonlight {
             }
             Message::OpenUrl(url) => open_url(url),
 
-            Message::LogFilterLevel(level) => self.log_level = level,
-            Message::LogFilterSource(source) => self.log_source = source,
-            Message::LogFilterText(value) => self.log_filter = value,
-            Message::ClearLogs => self.logs.clear(),
+            // A different set of lines is a different log: it opens at its
+            // end like the first one did.
+            Message::LogFilterLevel(level) => {
+                self.log_level = level;
+                return self.follow_log();
+            }
+            Message::LogFilterSource(source) => {
+                self.log_source = source;
+                return self.follow_log();
+            }
+            Message::LogFilterText(value) => {
+                self.log_filter = value;
+                return self.follow_log();
+            }
+            Message::ClearLogs => {
+                self.logs.clear();
+                return self.follow_log();
+            }
+            Message::LogScrolled(viewport) => {
+                let offset = viewport.absolute_offset().y;
+                let end = offset + viewport.bounds().height;
+                if end >= viewport.content_bounds().height - 4.0 {
+                    // At the last line, by whatever means: follow it.
+                    self.log_follow = true;
+                } else if self.log_follow && offset == 0.0 {
+                    // Thrown from its end to its very head, which is not the
+                    // reader's doing — a wheel moves it a notch and a drag
+                    // passes through everything between. It is the list being
+                    // laid out afresh as its page settles, and it goes back.
+                    return iced::widget::operation::snap_to_end(LOG_SCROLL);
+                } else {
+                    // Anywhere else the reader put it there, and it stays.
+                    self.log_follow = false;
+                }
+            }
+            Message::LogSnap => return iced::widget::operation::snap_to_end(LOG_SCROLL),
+            Message::Escape(window) => {
+                if Some(window) == self.tray_window && self.tray_open {
+                    return self.hide_tray();
+                }
+            }
+            Message::Shortcut => {
+                if self.preferences.subscription_url.is_some() {
+                    return self.update(Message::ToggleConnection);
+                }
+            }
             Message::Ignore => {}
             Message::ToggleConnectionProcess(process) => {
                 if !self.expanded_processes.remove(&process) {
@@ -1390,7 +1616,15 @@ impl Moonlight {
             Message::MinimiseWindow => return self.on_main(|id| iced::window::minimize(id, true)),
             Message::MaximiseWindow => return self.on_main(iced::window::toggle_maximize),
 
-            Message::TrayClicked(click) => return self.toggle_tray(click),
+            Message::Tray(event) => {
+                use moonlight_core::tray::Event;
+                return match event {
+                    Event::Panel => self.toggle_tray(),
+                    Event::Open => self.update(Message::OpenMain),
+                    Event::Toggle => self.update(Message::Shortcut),
+                    Event::Quit => self.update(Message::Quit),
+                };
+            }
             Message::Request(request) => {
                 // A link asks its question in the window; anything else a
                 // second launch wants is the window itself.
@@ -1411,14 +1645,12 @@ impl Moonlight {
             Message::LinkDismiss => self.link_prompt = None,
             Message::WindowEvent(id, event) => return self.window_event(id, event),
             Message::OpenMain => {
-                let close_tray = match (self.tray_window, self.tray_pinned) {
-                    (Some(id), false) => {
-                        self.tray_window = None;
-                        iced::window::close(id)
-                    }
-                    _ => Task::none(),
+                let put_away = if self.tray_open && !self.tray_pinned {
+                    self.hide_tray()
+                } else {
+                    Task::none()
                 };
-                return Task::batch([close_tray, self.open_main()]);
+                return Task::batch([put_away, self.open_main()]);
             }
             Message::OpenPage(page) => {
                 self.go_to(page);
@@ -1438,6 +1670,7 @@ impl Moonlight {
                         format!("Window backdrop: {}", if took { "Mica" } else { "none" }),
                     ));
                 } else if hwnd != 0 && Some(id) == self.tray_window {
+                    self.tray_hwnd = Some(hwnd);
                     // Acrylic rather than Mica: the panel is transient, and
                     // blurs what is live behind it as the system's own
                     // flyouts do.
@@ -1503,7 +1736,13 @@ impl Moonlight {
                 std::process::exit(0);
             }
 
-            Message::Controller(event) => return self.apply(event),
+            Message::Controller(event) => {
+                let task = self.apply(event);
+                // The icon's moon, its tooltip and its menu all follow what
+                // the controller reports; nothing is sent unless one changed.
+                moonlight_core::tray::update(self.tray_status());
+                return task;
+            }
             Message::ToggleServers => {
                 self.drawer.go(if self.drawer.to > 0.5 { 0.0 } else { 1.0 });
             }
@@ -1531,11 +1770,17 @@ impl Moonlight {
         match event {
             Event::State(state) => {
                 self.phase.go(if state.is_connected() { 1.0 } else { 0.0 });
-                if let ConnectionState::Failed(issue) = &state {
-                    self.last_error = Some(localization::issue(issue, self.locale()));
-                }
+                let failed = match &state {
+                    ConnectionState::Failed(issue) => {
+                        Some(localization::issue(issue, self.locale()))
+                    }
+                    _ => None,
+                };
                 self.state = state;
-                moonlight_core::tray::set_tooltip(&self.title_text());
+                if let Some(why) = failed {
+                    self.last_error = Some(why.clone());
+                    return self.notify(false, S::ConnectFailed, why);
+                }
             }
             Event::Nodes(nodes) => self.nodes = nodes,
             Event::Info(info) => {
@@ -1577,9 +1822,14 @@ impl Moonlight {
                     let excess = self.logs.len() - LOG_LIMIT;
                     self.logs.drain(..excess);
                 }
+                if self.page == Page::Logs && self.log_follow {
+                    return iced::widget::operation::snap_to_end(LOG_SCROLL);
+                }
             }
             Event::Error(issue) => {
-                self.last_error = Some(localization::issue(&issue, self.locale()));
+                let why = localization::issue(&issue, self.locale());
+                self.last_error = Some(why.clone());
+                return self.notify(false, S::NoteProblem, why);
             }
             Event::Refreshed(outcome) => {
                 // A link that did not load says nothing about the subscription
@@ -1598,10 +1848,10 @@ impl Moonlight {
                 if !self.importing || outcome.is_ok() {
                     self.refresh_issue = outcome.as_ref().err().cloned();
                 }
-                if self.importing {
-                    // A failed import goes back to the form with the reason on
-                    // it, rather than sitting on a spinner that never resolves.
-                    self.importing = false;
+                let imported = std::mem::take(&mut self.importing);
+                if imported {
+                    // A failed import goes back to the form, rather than
+                    // sitting on a spinner that never resolves.
                     match &outcome {
                         Ok(()) => self.import_done = true,
                         Err(issue) => {
@@ -1609,16 +1859,26 @@ impl Moonlight {
                         }
                     }
                 }
-                if std::mem::take(&mut self.refresh_asked) {
-                    let id = self.refresh_note.as_ref().map_or(0, |(id, _)| id + 1);
-                    // Long enough to read; a failure carries a reason, so it
-                    // stays longer.
-                    let shown_for = if outcome.is_ok() { 3200 } else { 6000 };
-                    self.refresh_note = Some((id, outcome));
-                    return Task::perform(
-                        tokio::time::sleep(Duration::from_millis(shown_for)),
-                        move |()| Message::HideRefreshNote(id),
-                    );
+                // Asked for by the user — a refresh from any page, or a link
+                // just added — it says how it went. One the app made on its
+                // own schedule does not: nobody was waiting on it.
+                if std::mem::take(&mut self.refresh_asked) || imported {
+                    let locale = self.locale();
+                    let (title, detail) = match (&outcome, imported) {
+                        (Ok(()), true) => {
+                            (S::ImportAdded, t(S::RefreshDoneDetail, locale).to_string())
+                        }
+                        (Ok(()), false) => {
+                            (S::RefreshDone, t(S::RefreshDoneDetail, locale).to_string())
+                        }
+                        (Err(issue), true) => {
+                            (S::ImportNotAdded, localization::issue(issue, locale))
+                        }
+                        (Err(issue), false) => {
+                            (S::RefreshFailed, localization::issue(issue, locale))
+                        }
+                    };
+                    return self.notify(outcome.is_ok(), title, detail);
                 }
             }
             Event::RoutingInputs { groups, rules } => {
@@ -1627,9 +1887,19 @@ impl Moonlight {
             }
             Event::RulesApplied(outcome) => {
                 self.rules_applying = false;
-                self.rules_issue = outcome
-                    .err()
-                    .map(|issue| localization::issue(&issue, self.locale()));
+                let locale = self.locale();
+                return match outcome {
+                    Ok(()) => self.notify(
+                        true,
+                        S::RulesApplied,
+                        t(S::RulesAppliedDetail, locale).to_string(),
+                    ),
+                    Err(issue) => self.notify(
+                        false,
+                        S::RulesNotApplied,
+                        localization::issue(&issue, locale),
+                    ),
+                };
             }
             Event::ShutdownComplete => {
                 self.launch_pending_installer();
@@ -1690,6 +1960,10 @@ impl Moonlight {
         }
         let (id, opened) = iced::window::open(iced::window::Settings {
             size: iced::Size::new(1240.0, 820.0),
+            // The macOS client's own floor. Without one the window could be
+            // dragged down to a sliver: the sidebar cut through its labels,
+            // the caption buttons over the logo, the page gone.
+            min_size: Some(iced::Size::new(1000.0, 680.0)),
             position: iced::window::Position::Centered,
             decorations: false,
             // Transparent, so Windows 11's Mica can show through the canvas.
@@ -1707,38 +1981,11 @@ impl Moonlight {
             .map(move |hwnd| Message::WindowHandle(id, hwnd))
     }
 
-    /// Opens the tray panel above the click, or closes it.
-    fn toggle_tray(&mut self, click: moonlight_core::tray::Click) -> Task<Message> {
-        if let Some(id) = self.tray_window.take() {
-            return iced::window::close(id);
-        }
-        if self
-            .tray_blurred
-            .is_some_and(|at| at.elapsed() < Duration::from_millis(400))
-        {
-            return Task::none();
-        }
-        let (width, height) = (screens::tray::WIDTH, screens::tray::HEIGHT);
-        // Placed in physical pixels against the work area — beside the click,
-        // above a taskbar at the bottom or below one at the top — and handed
-        // to the window in logical ones.
-        let position =
-            moonlight_core::tray::work_area().map(|(left, top, right, bottom, scale)| {
-                let (w, h, gap) = (width * scale, height * scale, 12.0 * scale);
-                let x = (click.x as f32 - w / 2.0).clamp(left as f32 + gap, right as f32 - w - gap);
-                let y = if (click.y - top) < (bottom - click.y) {
-                    top as f32 + gap
-                } else {
-                    bottom as f32 - h - gap
-                };
-                iced::Point::new(x / scale, y / scale)
-            });
+    /// Makes the tray panel, out of sight, and asks for its handle.
+    fn make_tray(&mut self) -> Task<Message> {
         let (id, opened) = iced::window::open(iced::window::Settings {
-            size: iced::Size::new(width, height),
-            position: position.map_or(
-                iced::window::Position::Default,
-                iced::window::Position::Specific,
-            ),
+            size: iced::Size::new(screens::tray::WIDTH, screens::tray::HEIGHT),
+            visible: false,
             decorations: false,
             resizable: false,
             transparent: true,
@@ -1751,18 +1998,107 @@ impl Moonlight {
             ..Default::default()
         });
         self.tray_window = Some(id);
-        self.tray_backdrop = false;
-        // Focus, like the handle, is asked for once the window exists: asked
-        // for alongside the open it could arrive first and be dropped, and a
-        // panel that never had focus never loses it — so a click elsewhere,
-        // which is how it is put away, did nothing.
-        opened.then(move |_| {
-            Task::batch([
-                iced::window::gain_focus(id),
-                iced::window::run(id, native_handle)
-                    .map(move |hwnd| Message::WindowHandle(id, hwnd)),
-            ])
+        opened
+            .then(move |_| iced::window::run(id, native_handle))
+            .map(move |hwnd| Message::WindowHandle(id, hwnd))
+    }
+
+    /// Shows the tray panel over its icon, or puts it away.
+    fn toggle_tray(&mut self) -> Task<Message> {
+        let Some(id) = self.tray_window else {
+            return Task::none();
+        };
+        if self.tray_open {
+            return self.hide_tray();
+        }
+        // A click on the icon takes focus from the panel first, and losing
+        // focus has already put it away: this is that same click, not a
+        // request to open it again.
+        if self
+            .tray_blurred
+            .is_some_and(|at| at.elapsed() < Duration::from_millis(400))
+        {
+            return Task::none();
+        }
+        self.tray_open = true;
+        self.tray_drawn = true;
+        self.tray_search.clear();
+
+        // Placed in physical pixels against the icon, and handed to the
+        // window in logical ones.
+        let (width, height) = (screens::tray::WIDTH, screens::tray::HEIGHT);
+        let position = moonlight_core::tray::work_area()
+            .zip(moonlight_core::tray::anchor())
+            .map(|((left, top, right, bottom, scale), icon)| {
+                let work = moonlight_core::tray::Rect {
+                    left,
+                    top,
+                    right,
+                    bottom,
+                };
+                let (x, y) = moonlight_core::tray::place(
+                    icon,
+                    work,
+                    (width * scale) as i32,
+                    (height * scale) as i32,
+                    (12.0 * scale) as i32,
+                );
+                iced::Point::new(x as f32 / scale, y as f32 / scale)
+            });
+        // In this order: where, then shown, then focused. A panel that never
+        // had focus never loses it — and losing it is how a click elsewhere
+        // puts it away.
+        position
+            .map_or_else(Task::none, |at| iced::window::move_to(id, at))
+            .chain(iced::window::set_mode(id, iced::window::Mode::Windowed))
+            .chain(iced::window::gain_focus(id))
+            .chain(iced::widget::operation::snap_to(
+                screens::tray::LIST_SCROLL,
+                iced::widget::scrollable::RelativeOffset::START,
+            ))
+    }
+
+    /// Puts the tray panel away. Unpinned as it goes, as on macOS: the pin is
+    /// for this opening, not the next.
+    fn hide_tray(&mut self) -> Task<Message> {
+        self.tray_open = false;
+        self.tray_pinned = false;
+        self.tray_window.map_or_else(Task::none, |id| {
+            iced::window::set_mode(id, iced::window::Mode::Hidden)
+                .chain(Task::done(Message::TrayPutAway))
         })
+    }
+
+    /// Puts a note at the foot of the window, in place of any that is there,
+    /// and sets it to go: long enough to read, and longer when it carries a
+    /// reason.
+    fn notify(&mut self, good: bool, title: S, detail: String) -> Task<Message> {
+        self.notes += 1;
+        let id = self.notes;
+        self.note = Some(Note {
+            id,
+            good,
+            title: t(title, self.locale()).to_string(),
+            detail,
+        });
+        self.note_at = Some(Instant::now());
+        let shown_for = Duration::from_millis(if good { 3200 } else { 6500 });
+        // The timer is made when the task first runs, inside the runtime —
+        // made here it would need one at the moment of the call.
+        Task::perform(
+            async move { tokio::time::sleep(shown_for).await },
+            move |()| Message::HideNote(id),
+        )
+    }
+
+    /// Takes the log to its last line and keeps it there.
+    ///
+    /// Asked for as a message of its own rather than done here: a scroller is
+    /// moved in the interface as it stands, and the one this is for — the log
+    /// just opened, or just filtered — is only built once this update is over.
+    fn follow_log(&mut self) -> Task<Message> {
+        self.log_follow = true;
+        Task::done(Message::LogSnap)
     }
 
     fn window_event(&mut self, id: iced::window::Id, event: iced::window::Event) -> Task<Message> {
@@ -1771,12 +2107,15 @@ impl Moonlight {
             Event::CloseRequested if Some(id) == self.main_window => {
                 self.update(Message::CloseWindow)
             }
+            // Alt+F4 on the panel puts it away; it is never closed.
+            Event::CloseRequested if Some(id) == self.tray_window => self.hide_tray(),
             Event::CloseRequested => iced::window::close(id),
             // The panel goes when the user looks elsewhere, unless pinned.
-            Event::Unfocused if Some(id) == self.tray_window && !self.tray_pinned => {
-                self.tray_window = None;
+            Event::Unfocused
+                if Some(id) == self.tray_window && self.tray_open && !self.tray_pinned =>
+            {
                 self.tray_blurred = Some(Instant::now());
-                iced::window::close(id)
+                self.hide_tray()
             }
             Event::Closed => {
                 if Some(id) == self.main_window {
@@ -1784,6 +2123,7 @@ impl Moonlight {
                 }
                 if Some(id) == self.tray_window {
                     self.tray_window = None;
+                    self.tray_open = false;
                 }
                 Task::none()
             }
@@ -1874,6 +2214,7 @@ impl Moonlight {
             // A timer rather than a wake notification: after sleep the missed
             // tick fires at once, which is the catch-up a wake handler would do.
             iced::time::every(Duration::from_secs(300)).map(|_| Message::AutoUpdateTick),
+            iced::event::listen_with(key_events),
         ];
         // While a rule is lifted, the pointer anywhere in the window moves it.
         if self.rule_drag.is_some() {
@@ -1885,10 +2226,21 @@ impl Moonlight {
             subscriptions.push(iced::time::every(Duration::from_secs(1)).map(Message::Tick));
         }
 
+        // The tray panel's speeds and uptime are read by the second.
+        if self.tray_open && self.state.is_connected() {
+            subscriptions.push(iced::time::every(Duration::from_secs(1)).map(Message::Tick));
+        }
+
         // An entrance or a rail glide needs frames regardless of what the
         // tunnel is doing, and both are short.
+        //
+        // The window's own frames, not a timer: one tick for each frame the
+        // display shows, so a 144 Hz screen is animated at 144 and a 60 Hz one
+        // at 60. A 16 ms timer was sixty-odd ticks a second on any screen,
+        // out of step with all of them — on a fast display most frames showed
+        // nothing new and the rest jumped two steps.
         if self.is_animating() {
-            subscriptions.push(iced::time::every(Duration::from_millis(16)).map(Message::Tick));
+            subscriptions.push(iced::window::frames().map(Message::Tick));
             return Subscription::batch(subscriptions);
         }
 
@@ -1896,9 +2248,7 @@ impl Moonlight {
         // reason to wake the GPU sixty times a second.
         match Cadence::for_state(&self.state, self.page) {
             Cadence::Idle => {}
-            Cadence::Frame => {
-                subscriptions.push(iced::time::every(Duration::from_millis(16)).map(Message::Tick))
-            }
+            Cadence::Frame => subscriptions.push(iced::window::frames().map(Message::Tick)),
             Cadence::Second => {
                 subscriptions.push(iced::time::every(Duration::from_secs(1)).map(Message::Tick))
             }
@@ -1908,7 +2258,13 @@ impl Moonlight {
 
     fn view(&self, window: iced::window::Id) -> Element<'_, Message> {
         if Some(window) == self.tray_window {
-            return screens::tray::view(self);
+            // Out of sight it is not built: it would be laid out again for
+            // every tick of the window's own animations.
+            return if self.tray_drawn {
+                screens::tray::view(self)
+            } else {
+                Space::new().into()
+            };
         }
         self.main_view()
     }
@@ -1940,7 +2296,13 @@ impl Moonlight {
         // in a scrollable gives its column an unbounded height, and every
         // `Length::Fill` inside then expands into that infinity and squeezes the
         // dial out of the layout entirely.
-        let scrolls = self.page != Page::Connect;
+        // The log is laid out to fit too: its list scrolls on its own, so it
+        // can be kept at its last line.
+        // The rules likewise, both tabs of them: the subscription's build
+        // only the rows in view, which needs a list that knows where it is
+        // scrolled to, and the user's own are laid out the same way so the
+        // page is one page whichever tab is showing.
+        let scrolls = !matches!(self.page, Page::Connect | Page::Logs | Page::Rules);
 
         let body = match self.page {
             Page::Connect => screens::connect::view(self),
@@ -1954,7 +2316,7 @@ impl Moonlight {
 
         // Every page but the connect one opens with its own title, and it
         // scrolls with the page: there is no header bar to hold it.
-        let body = if scrolls {
+        let body = if self.page != Page::Connect {
             column![self.page_title(), body].spacing(22).into()
         } else {
             body
@@ -1992,8 +2354,12 @@ impl Moonlight {
                             // under it and the update button came out
                             // half-covered. Reserving the gutter on the content
                             // is what keeps them clear of it.
+                            // The foot's margin is inside too, so the page
+                            // scrolls to the window's edge rather than being
+                            // cut off a margin short of it.
                             container(body).padding(iced::Padding {
                                 right: SCROLLBAR_GUTTER,
+                                bottom: PAGE_MARGIN,
                                 ..iced::Padding::ZERO
                             }),
                         )
@@ -2013,12 +2379,19 @@ impl Moonlight {
             ])
             .width(Length::Fill)
             .height(Length::Fill)
-            // Clear of the caption band above, 24 the rest of the way round.
+            // Clear of the caption band above, and the macOS client's margin
+            // the rest of the way round — the same on every page: where the
+            // page scrolls, its bar's gutter is part of the right margin
+            // rather than added to it.
             .padding(iced::Padding {
                 top: moonlight_design::motion::metrics::TITLE_BAR + 8.0,
-                right: 24.0,
-                bottom: 24.0,
-                left: 24.0,
+                right: if scrolls {
+                    PAGE_MARGIN - SCROLLBAR_GUTTER
+                } else {
+                    PAGE_MARGIN
+                },
+                bottom: if scrolls { 0.0 } else { PAGE_MARGIN },
+                left: PAGE_MARGIN,
             }),
         ]
         .height(Length::Fill);
@@ -2045,8 +2418,10 @@ impl Moonlight {
         .width(Length::Fill)
         .height(Length::Fill)
         .style({
-            let backdrop = self.backdrop.is_some();
-            move |_| theme::canvas(palette, backdrop)
+            // Three quarters over Mica, as the macOS client lays its canvas
+            // over the blurred desktop.
+            let strength = if self.backdrop.is_some() { 0.75 } else { 1.0 };
+            move |_| theme::canvas(palette, strength)
         });
 
         // The resize edges go on last, over everything: an undecorated window
@@ -2064,6 +2439,8 @@ impl Moonlight {
             .into(),
             None => window.into(),
         };
+        let window: Element<'_, Message> =
+            iced::widget::stack![window, self.note_layer(inset + rail)].into();
         let framed = screens::resize::frame(window);
         match (&self.link_prompt, &self.rule_editor) {
             (Some(prompt), _) => {
@@ -2075,6 +2452,33 @@ impl Moonlight {
             (None, None) => framed,
         }
     }
+}
+
+/// The app's two keys: Escape, and the connect shortcut the moon's tooltip
+/// names — read off the key's place on the board, so it is the same key in
+/// either layout.
+fn key_events(
+    event: iced::Event,
+    _status: iced::event::Status,
+    window: iced::window::Id,
+) -> Option<Message> {
+    use iced::keyboard::key::{Code, Named, Physical};
+    use iced::keyboard::{Event, Key};
+    let iced::Event::Keyboard(Event::KeyPressed {
+        key,
+        physical_key,
+        modifiers,
+        repeat: false,
+        ..
+    }) = event
+    else {
+        return None;
+    };
+    if key == Key::Named(Named::Escape) {
+        return Some(Message::Escape(window));
+    }
+    (physical_key == Physical::Code(Code::KeyC) && modifiers.control() && modifiers.shift())
+        .then_some(Message::Shortcut)
 }
 
 fn drag_events(
@@ -2169,17 +2573,47 @@ fn controller_events() -> impl iced::futures::Stream<Item = Message> {
         .get()
         .and_then(|slot| slot.lock().ok().and_then(|mut slot| slot.take()));
 
-    iced::futures::stream::unfold(receiver, |mut receiver| async move {
-        let Some(rx) = receiver.as_mut() else {
-            // The receiver was already taken — park forever rather than ending
-            // the stream, which iced would treat as a subscription to restart
-            // in a loop.
-            std::future::pending::<()>().await;
-            unreachable!()
-        };
-        let event = rx.recv().await?;
-        Some((Message::Controller(event), receiver))
-    })
+    // `held` is an event that arrived while log lines were being gathered,
+    // and goes out next.
+    iced::futures::stream::unfold(
+        (receiver, None::<Event>),
+        |(mut receiver, mut held)| async move {
+            let Some(rx) = receiver.as_mut() else {
+                // The receiver was already taken — park forever rather than
+                // ending the stream, which iced would treat as a subscription
+                // to restart in a loop.
+                std::future::pending::<()>().await;
+                unreachable!()
+            };
+            loop {
+                let event = match held.take() {
+                    Some(event) => event,
+                    None => rx.recv().await?,
+                };
+                let Event::Log(entry) = event else {
+                    return Some((Message::Controller(event), (receiver, None)));
+                };
+                buffer_log(entry);
+                if !LOG_WATCHED.load(Ordering::Relaxed) {
+                    continue;
+                }
+                // The log is on screen: one redraw for whatever arrives in
+                // the next tenth of a second, not one for each line.
+                let until = tokio::time::Instant::now() + Duration::from_millis(100);
+                loop {
+                    match tokio::time::timeout_at(until, rx.recv()).await {
+                        Ok(Some(Event::Log(entry))) => buffer_log(entry),
+                        Ok(Some(other)) => {
+                            held = Some(other);
+                            break;
+                        }
+                        Ok(None) | Err(_) => break,
+                    }
+                }
+                return Some((Message::LogsArrived, (receiver, held)));
+            }
+        },
+    )
 }
 
 fn send(command: Command) {
@@ -2207,6 +2641,8 @@ const ICON_BATCH: usize = 48;
 /// A scrollable's bar is painted over its contents, not beside them, so the
 /// content has to be told to keep out of the way. The gutter is the bar plus
 /// both its margins.
+/// Between the page and the window's edges, and between it and the sidebar.
+const PAGE_MARGIN: f32 = 28.0;
 const SCROLLBAR_WIDTH: f32 = 6.0;
 const SCROLLBAR_MARGIN: f32 = 3.0;
 const SCROLLBAR_GUTTER: f32 = SCROLLBAR_WIDTH + SCROLLBAR_MARGIN * 2.0;
@@ -2239,7 +2675,7 @@ fn flags_directory() -> Option<std::path::PathBuf> {
 
 /// Which flags are actually on disk. Read once — a missing directory is not an
 /// error, it just means every node falls back to the globe.
-fn available_flags() -> std::collections::HashSet<String> {
+fn available_flags() -> HashMap<String, iced::widget::image::Handle> {
     let Some(directory) = flags_directory() else {
         return Default::default();
     };
@@ -2250,9 +2686,14 @@ fn available_flags() -> std::collections::HashSet<String> {
         .filter_map(Result::ok)
         .filter_map(|entry| {
             let path = entry.path();
-            (path.extension()? == "png")
-                .then(|| path.file_stem()?.to_str().map(str::to_lowercase))
-                .flatten()
+            if path.extension()? != "png" {
+                return None;
+            }
+            let code = path.file_stem()?.to_str()?.to_lowercase();
+            // The handle is made here, once: a list row asks for its flag on
+            // every frame, and making one meant finding the executable and
+            // building a path each time.
+            Some((code, iced::widget::image::Handle::from_path(path)))
         })
         .collect()
 }
@@ -2557,10 +2998,38 @@ impl Moonlight {
     pub fn refresh_issue(&self) -> Option<&Issue> {
         self.refresh_issue.as_ref()
     }
-    pub fn refresh_note(&self) -> Option<(u64, &Result<(), Issue>)> {
-        self.refresh_note
-            .as_ref()
-            .map(|(id, outcome)| (*id, outcome))
+    /// The note's layer: over the page, at its foot, centred on the page
+    /// rather than the window — `lead` is the sidebar's width, which it
+    /// stands clear of. Always there, empty when there is nothing to say, so
+    /// a note arriving does not rebuild everything under it and cost the
+    /// page its scroll position or a field its cursor.
+    fn note_layer(&self, lead: f32) -> Element<'_, Message> {
+        let Some(note) = &self.note else {
+            return container(Space::new()).into();
+        };
+        // It rises the last of the way into place, as the macOS note slides
+        // up from the edge.
+        let rise = self.note_at.map_or(1.0, |at| {
+            spring::at(at.elapsed().as_secs_f32(), spring::STANDARD)
+        });
+        container(
+            container(components::note(
+                note.good,
+                &note.title,
+                &note.detail,
+                Message::HideNote(note.id),
+                self.palette(),
+            ))
+            .max_width(460),
+        )
+        .center_x(Length::Fill)
+        .align_bottom(Length::Fill)
+        .padding(iced::Padding {
+            left: lead,
+            bottom: 8.0 + 14.0 * rise,
+            ..iced::Padding::ZERO
+        })
+        .into()
     }
     pub fn tray_pinned(&self) -> bool {
         self.tray_pinned
@@ -2568,10 +3037,28 @@ impl Moonlight {
     pub fn tray_search(&self) -> &str {
         &self.tray_search
     }
-    /// The service's announcement, unless the user has put this one away.
+    /// The service's announcement, while it has one.
     pub fn announce(&self) -> Option<&str> {
-        let announce = self.info.announce.as_deref()?;
-        (self.preferences.dismissed_announce.as_deref() != Some(announce)).then_some(announce)
+        self.info
+            .announce
+            .as_deref()
+            .filter(|a| !a.trim().is_empty())
+    }
+    /// Whether the user folded this announcement down to its first line. A
+    /// new message is a different one, and arrives open.
+    pub fn announce_folded(&self) -> bool {
+        self.info.announce.is_some() && self.preferences.dismissed_announce == self.info.announce
+    }
+    /// How open the announcement is drawn: 0 folded, 1 open, and between the
+    /// two while it moves from one to the other.
+    pub fn announce_openness(&self) -> f32 {
+        if self.announce.moving() {
+            self.announce.value().clamp(0.0, 1.0)
+        } else if self.announce_folded() {
+            0.0
+        } else {
+            1.0
+        }
     }
     pub fn apps(&self) -> &[AppEntry] {
         &self.apps
@@ -2584,12 +3071,10 @@ impl Moonlight {
     }
     /// The flag picture for a node's region, if one shipped with the build.
     pub fn flag_image(&self, code: &str) -> Option<iced::widget::image::Handle> {
-        let code = code.to_lowercase();
-        if !self.flags.contains(&code) {
-            return None;
-        }
-        let path = flags_directory()?.join(format!("{code}.png"));
-        Some(iced::widget::image::Handle::from_path(path))
+        self.flags.get(&code.to_lowercase()).cloned()
+    }
+    pub fn rules_scroll(&self) -> (f32, f32) {
+        self.rules_scroll
     }
     pub fn is_running(&self, executable: &str) -> bool {
         self.running
@@ -2631,9 +3116,7 @@ impl Moonlight {
     pub fn rules_applying(&self) -> bool {
         self.rules_applying
     }
-    pub fn rules_issue(&self) -> Option<&str> {
-        self.rules_issue.as_deref()
-    }
+
     pub fn routing_groups(&self) -> &[String] {
         &self.routing_groups
     }
@@ -2789,6 +3272,134 @@ impl Moonlight {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_refresh_the_user_asked_for_says_how_it_went_on_any_page() {
+        // From the subscription page as much as from the connect one: the
+        // note belongs to the window, not to a page.
+        for page in [Page::Connect, Page::Subscription] {
+            let mut app = app();
+            app.page = page;
+            let _ = app.update(Message::Refresh);
+            let _ = app.apply(Event::Refreshed(Ok(())));
+            let note = app
+                .note
+                .clone()
+                .expect("a refresh that was asked for is reported");
+            assert!(note.good);
+            assert_eq!(note.title, t(S::RefreshDone, app.locale()));
+
+            let _ = app.update(Message::Refresh);
+            let _ = app.apply(Event::Refreshed(Err(Issue::LinkRejected)));
+            let note = app.note.clone().expect("and so is one that failed");
+            assert!(!note.good);
+            assert_eq!(note.title, t(S::RefreshFailed, app.locale()));
+            assert!(!note.detail.is_empty(), "a failure carries its reason");
+        }
+    }
+
+    #[test]
+    fn a_refresh_nobody_asked_for_says_nothing() {
+        // The scheduled one. A note for it would pop up over whatever the
+        // user was doing, about something they had not asked.
+        let mut app = app();
+        let _ = app.apply(Event::Refreshed(Ok(())));
+        assert_eq!(app.note, None);
+        let _ = app.apply(Event::Refreshed(Err(Issue::LinkRejected)));
+        assert_eq!(app.note, None);
+    }
+
+    #[test]
+    fn what_fails_says_so_in_a_note_and_what_works_too() {
+        let mut app = app();
+        let _ = app.apply(Event::State(ConnectionState::Failed(Issue::RoutesTaken)));
+        let note = app.note.clone().expect("a failed connect is reported");
+        assert!(!note.good);
+        assert_eq!(note.title, t(S::ConnectFailed, app.locale()));
+
+        let _ = app.apply(Event::RulesApplied(Ok(())));
+        let note = app.note.clone().expect("applied rules are reported");
+        assert!(note.good);
+        let _ = app.apply(Event::RulesApplied(Err(Issue::RulesRefused)));
+        assert_eq!(
+            app.note.as_ref().map(|n| n.title.as_str()),
+            Some(t(S::RulesNotApplied, app.locale()))
+        );
+    }
+
+    #[test]
+    fn an_older_notes_timer_does_not_take_a_newer_note_away() {
+        let mut app = app();
+        let _ = app.apply(Event::RulesApplied(Ok(())));
+        let first = app.note.as_ref().map(|n| n.id).expect("a note");
+        let _ = app.apply(Event::RulesApplied(Ok(())));
+        let second = app.note.as_ref().map(|n| n.id).expect("a note");
+        assert_ne!(first, second);
+        // The first note's timer fires while the second is showing.
+        let _ = app.update(Message::HideNote(first));
+        assert!(app.note.is_some());
+        let _ = app.update(Message::HideNote(second));
+        assert_eq!(app.note, None);
+    }
+
+    /// A key going down, as iced reports it.
+    fn press(
+        key: iced::keyboard::Key,
+        code: iced::keyboard::key::Code,
+        modifiers: iced::keyboard::Modifiers,
+        repeat: bool,
+    ) -> iced::Event {
+        iced::Event::Keyboard(iced::keyboard::Event::KeyPressed {
+            key: key.clone(),
+            modified_key: key,
+            physical_key: iced::keyboard::key::Physical::Code(code),
+            location: iced::keyboard::Location::Standard,
+            modifiers,
+            text: None,
+            repeat,
+        })
+    }
+
+    #[test]
+    fn the_connect_shortcut_is_the_key_not_the_letter() {
+        use iced::keyboard::key::{Code, Named};
+        use iced::keyboard::{Key, Modifiers};
+        let window = iced::window::Id::unique();
+        let ignored = iced::event::Status::Ignored;
+        let held = Modifiers::CTRL | Modifiers::SHIFT;
+
+        // In a Russian layout the same key types "с", and it is still the
+        // shortcut the moon's tooltip names.
+        for letter in ["c", "с"] {
+            let event = press(Key::Character(letter.into()), Code::KeyC, held, false);
+            assert!(matches!(
+                key_events(event, ignored, window),
+                Some(Message::Shortcut)
+            ));
+        }
+        // Without both modifiers it is only a letter, and held down it is
+        // not pressed again and again.
+        let plain = press(
+            Key::Character("c".into()),
+            Code::KeyC,
+            Modifiers::CTRL,
+            false,
+        );
+        assert!(key_events(plain, ignored, window).is_none());
+        let repeated = press(Key::Character("c".into()), Code::KeyC, held, true);
+        assert!(key_events(repeated, ignored, window).is_none());
+
+        let escape = press(
+            Key::Named(Named::Escape),
+            Code::Escape,
+            Modifiers::empty(),
+            false,
+        );
+        assert!(matches!(
+            key_events(escape, ignored, window),
+            Some(Message::Escape(id)) if id == window
+        ));
+    }
 
     fn app() -> Moonlight {
         let mut app = Moonlight::with_preferences(Preferences::default());

@@ -274,15 +274,17 @@ impl Controller {
     /// used to put back the theme, language and sidebar from before the user
     /// changed them — and the next launch opened with the old ones.
     fn save(&mut self) {
-        let on_disk = Preferences::load();
-        self.preferences.appearance = on_disk.appearance;
-        self.preferences.locale = on_disk.locale;
-        self.preferences.sidebar_collapsed = on_disk.sidebar_collapsed;
-        self.preferences.launch_at_login = on_disk.launch_at_login;
-        self.preferences.dismissed_announce = on_disk.dismissed_announce;
-        self.preferences.notifications = on_disk.notifications;
-        self.preferences.sent_alerts = on_disk.sent_alerts;
-        let _ = self.preferences.save();
+        // Read and written as one step: a setting the window saved between
+        // the two would otherwise be put back as it was a moment before.
+        let _ = self.preferences.save_keeping(|mine, on_disk| {
+            mine.appearance = on_disk.appearance;
+            mine.locale = on_disk.locale;
+            mine.sidebar_collapsed = on_disk.sidebar_collapsed;
+            mine.launch_at_login = on_disk.launch_at_login;
+            mine.dismissed_announce = on_disk.dismissed_announce;
+            mine.notifications = on_disk.notifications;
+            mine.sent_alerts = on_disk.sent_alerts;
+        });
         self.emit(Event::PreferencesChanged(Box::new(
             self.preferences.clone(),
         )));
@@ -612,7 +614,7 @@ impl Controller {
                 let _ = events.send(Event::Log(LogEntry {
                     source: LogSource::Core,
                     level: level_of(&line),
-                    message: redactions.apply(&line),
+                    message: redactions.apply(&payload_of(&line)),
                     at: time::OffsetDateTime::now_utc().unix_timestamp(),
                 }));
             }
@@ -1395,6 +1397,18 @@ fn level_of(line: &str) -> String {
     "INFO".to_string()
 }
 
+/// What a line of the core's own output says, without what it says it in:
+/// `time="…" level=info msg="Load GeoSite rule: cn"` is the message alone. The
+/// log has a column for the time and one for the level already, and the
+/// wrapper pushed what happened off the end of every line.
+fn payload_of(line: &str) -> String {
+    let Some(at) = line.find(" msg=\"").filter(|_| line.starts_with("time=")) else {
+        return line.to_string();
+    };
+    let said = &line[at + 6..];
+    said.strip_suffix('"').unwrap_or(said).replace("\\\"", "\"")
+}
+
 /// The core beside the executable, which is where the portable layout puts it.
 pub fn core_binary() -> std::path::PathBuf {
     std::env::current_exe()
@@ -1448,6 +1462,24 @@ pub fn count_nodes(body: &str) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_core_line_is_shown_as_what_it_says() {
+        assert_eq!(
+            payload_of(
+                r#"time="2026-10-05T19:52:31.7+03:00" level=info msg="Load GeoSite rule: cn""#
+            ),
+            "Load GeoSite rule: cn"
+        );
+        // Quotes inside the message come through as quotes.
+        assert_eq!(
+            payload_of(r#"time="x" level=warning msg="no \"proxy\" named a""#),
+            r#"no "proxy" named a"#
+        );
+        // Anything not in that shape is left exactly as it was.
+        assert_eq!(payload_of("panic: runtime error"), "panic: runtime error");
+        assert_eq!(payload_of(r#"note msg="x""#), r#"note msg="x""#);
+    }
 
     #[test]
     fn log_levels_are_a_floor_not_an_exact_match() {

@@ -10,6 +10,14 @@
 //! The token names are the ones every screen was written against; what they
 //! resolve to is what changed. `accent` fills, `accent_ink` is the accent as
 //! type or a glyph, `text_on_accent` sits on an accent fill.
+//!
+//! The surfaces are glass, not slabs. The macOS client's solid surface colours
+//! are only its fallback for systems without Liquid Glass; what it ships is a
+//! translucent sheet, lit from above and rimmed. So `surface` and its steps are
+//! washes over whatever is behind — the canvas, and through it the desktop —
+//! with `surface_lit` the same sheet where the light catches its head. What
+//! has to hide what is under it (a menu, a dialog, the sidebar) takes `raised`
+//! or `rail`, which are solid.
 
 use iced::Color;
 
@@ -62,6 +70,16 @@ pub struct Palette {
     pub surface2: Color,
     pub surface3: Color,
     pub surface_nav: Color,
+    /// A glass surface's head, where the light falls on it.
+    pub surface_lit: Color,
+    /// The sidebar: structure, so the heavier, solid material.
+    pub rail: Color,
+    /// Solid, for what floats over the page and must hide it.
+    pub raised: Color,
+    /// The canvas where the light comes in, at the window's top.
+    pub bg_lit: Color,
+    /// The shadow a floating surface drops.
+    pub shade: Color,
 
     // Text
     pub text: Color,
@@ -139,10 +157,15 @@ impl Palette {
 
         bg: hex(0x0A0A0A),
         bg_deep: hex(0x000000),
-        surface: hex(0x111111),
-        surface2: hex(0x1A1A1A),
-        surface3: hex(0x262626),
+        surface: hexa(0xFFFFFF, 0.085),
+        surface2: hexa(0xFFFFFF, 0.10),
+        surface3: hexa(0xFFFFFF, 0.17),
         surface_nav: hex(0x0A0A0A),
+        surface_lit: hexa(0xFFFFFF, 0.15),
+        rail: hex(0x121212),
+        raised: hex(0x1C1C1C),
+        bg_lit: hex(0x1B1B1B),
+        shade: hexa(0x000000, 0.0),
 
         text: hex(0xF5F5F5),
         text2: hex(0xA3A3A3),
@@ -157,7 +180,7 @@ impl Palette {
         accent_ink: hex(0xFFFFFF),
         accent_ink_strong: hex(0xFFFFFF),
         accent_line: hexa(0xFFFFFF, 0.6),
-        selection: hex(0x262626),
+        selection: hexa(0xFFFFFF, 0.14),
 
         status_secure: hex(0xFFFFFF),
         danger: hex(0xFF453A),
@@ -165,12 +188,12 @@ impl Palette {
         warning: hex(0xFFD60A),
         info: hex(0xA3A3A3),
 
-        // Tiles behind a glyph: all one quiet grey now.
-        cat1: hex(0x1F1F1F),
-        cat2: hex(0x1F1F1F),
-        cat3: hex(0x1F1F1F),
-        cat4: hex(0x1F1F1F),
-        cat5: hex(0x1F1F1F),
+        // Tiles behind a glyph: all one quiet glass now.
+        cat1: hexa(0xFFFFFF, 0.10),
+        cat2: hexa(0xFFFFFF, 0.10),
+        cat3: hexa(0xFFFFFF, 0.10),
+        cat4: hexa(0xFFFFFF, 0.10),
+        cat5: hexa(0xFFFFFF, 0.10),
         hero_gold: hex(0xFFFFFF),
 
         st_up: hex(0x30D158),
@@ -207,12 +230,19 @@ impl Palette {
         hairline: hexa(0x000000, 0.10),
         hairline_soft: hexa(0x000000, 0.06),
 
-        bg: hex(0xFAFAFA),
+        // The canvas is the off-white and the surfaces are the white: a
+        // sheet of glass over a light desk is brighter than the desk.
+        bg: hex(0xE9E9E6),
         bg_deep: hex(0xFFFFFF),
-        surface: hex(0xF5F5F5),
-        surface2: hex(0xEDEDED),
-        surface3: hex(0xE0E0E0),
+        surface: hexa(0xFFFFFF, 0.86),
+        surface2: hexa(0xFFFFFF, 0.90),
+        surface3: hexa(0x000000, 0.08),
         surface_nav: hex(0xFAFAFA),
+        surface_lit: hex(0xFFFFFF),
+        rail: hex(0xFCFCFB),
+        raised: hex(0xFFFFFF),
+        bg_lit: hex(0xF6F6F3),
+        shade: hexa(0x000000, 0.07),
 
         text: hex(0x0A0A0A),
         text2: hex(0x525252),
@@ -227,7 +257,7 @@ impl Palette {
         accent_ink: hex(0x0A0A0A),
         accent_ink_strong: hex(0x0A0A0A),
         accent_line: hexa(0x000000, 0.5),
-        selection: hex(0xFFFFFF),
+        selection: hexa(0x000000, 0.065),
 
         status_secure: hex(0x0A0A0A),
         danger: hex(0xD70015),
@@ -235,11 +265,11 @@ impl Palette {
         warning: hex(0xB58900),
         info: hex(0x525252),
 
-        cat1: hex(0xEDEDED),
-        cat2: hex(0xEDEDED),
-        cat3: hex(0xEDEDED),
-        cat4: hex(0xEDEDED),
-        cat5: hex(0xEDEDED),
+        cat1: hexa(0xFFFFFF, 0.90),
+        cat2: hexa(0xFFFFFF, 0.90),
+        cat3: hexa(0xFFFFFF, 0.90),
+        cat4: hexa(0xFFFFFF, 0.90),
+        cat5: hexa(0xFFFFFF, 0.90),
         hero_gold: hex(0x0A0A0A),
 
         st_up: hex(0x248A3D),
@@ -314,6 +344,11 @@ impl Palette {
             surface2,
             surface3,
             surface_nav,
+            surface_lit,
+            rail,
+            raised,
+            bg_lit,
+            shade,
             text,
             text2,
             text_muted,
@@ -450,7 +485,7 @@ mod tests {
 
     #[test]
     fn a_half_lerp_sits_between_the_two_backgrounds() {
-        // #0A0A0A to #FAFAFA: the midpoint must be neither end.
+        // Near-black to off-white: the midpoint must be neither end.
         let middle = Palette::lerp(&Palette::DARK, &Palette::LIGHT, 0.5);
         assert!(middle.bg.r > Palette::DARK.bg.r);
         assert!(middle.bg.r < Palette::LIGHT.bg.r);
@@ -464,6 +499,31 @@ mod tests {
         let (dark, light) = (Palette::DARK.hairline, Palette::LIGHT.hairline);
         assert!(dark.a < 1.0 && light.a < 1.0);
         assert!((middle.hairline.a - (dark.a + light.a) / 2.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn glass_is_a_wash_and_what_must_hide_the_page_is_solid() {
+        // A card lets the canvas through; a menu, a dialog and the sidebar's
+        // tab — which is laid over the sidebar's own edge — may not.
+        for palette in [Palette::DARK, Palette::LIGHT] {
+            assert!(palette.surface.a < 1.0);
+            assert!(palette.surface2.a < 1.0);
+            assert_eq!(palette.raised.a, 1.0);
+            assert_eq!(palette.rail.a, 1.0);
+        }
+    }
+
+    #[test]
+    fn the_light_canvas_is_darker_than_what_sits_on_it() {
+        // White glass on an off-white desk. The other way round — grey slabs
+        // on a white page — is the flat fallback this replaced.
+        let light = Palette::LIGHT;
+        assert!(light.bg.r < light.raised.r);
+        assert!(light.bg.r < light.rail.r);
+        assert!(
+            light.shade.a > 0.0,
+            "a white sheet needs a shadow to have an edge"
+        );
     }
 
     #[test]

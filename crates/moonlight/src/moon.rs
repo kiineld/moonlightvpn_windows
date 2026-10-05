@@ -54,7 +54,7 @@ impl<Message> canvas::Program<Message> for Moon {
         // The disc the moon sits on, and its rim: the moon's colour while it
         // is lit, a quiet line under the pointer.
         let disc = Path::circle(centre, side / 2.0);
-        frame.fill(&disc, dim(palette.surface));
+        frame.fill(&disc, dim(palette.surface2));
         let hovered = self.enabled
             && cursor
                 .position_in(bounds)

@@ -137,14 +137,6 @@ fn form(app: &Moonlight) -> Element<'_, Message> {
     ]
     .spacing(16);
 
-    if let Some(error) = app.last_error() {
-        content = content.push(
-            text(error.to_string())
-                .size(scale::BODY_SM)
-                .color(palette.danger),
-        );
-    }
-
     // Only offered once there is something to go back to.
     if app.preferences().subscription_url.is_some() {
         content = content.push(

@@ -199,13 +199,23 @@ zip route — a detached batch script unpacking over the install folder — is g
 
 The app is an iced *daemon*: it outlives its window. Closing the window (the ×
 or Alt+F4) leaves it in the notification area; quitting is the tray panel's
-own button, and goes through the same shutdown that puts the proxy settings
-back. The icon is raw `Shell_NotifyIcon` on a message-only window (`tray.rs`);
-its balloons carry the expiry and low-traffic warnings, each sent once and only
-with the switch on. A click opens the tray panel — state and speeds, rules /
-global / direct (patched into the running core; global points mihomo's
-`GLOBAL` at the app's selector), a searchable server list with a ping per row,
-and a connect button — which closes when it loses focus unless pinned.
+own button or the icon's menu, and goes through the same shutdown that puts the
+proxy settings back. The icon is raw `Shell_NotifyIcon` on a hidden top-level
+window (`tray.rs`) — not a message-only one, which never hears the broadcasts
+that say Explorer restarted or the taskbar changed theme. It is the logo's moon,
+drawn in code: a crescent in the taskbar's ink while the tunnel is down, the
+full moon in lime while it is up. Its balloons carry the expiry and low-traffic
+warnings, each sent once and only with the switch on.
+
+A left click opens the tray panel — state and speeds, rules / global / direct
+(patched into the running core; global points mihomo's `GLOBAL` at the app's
+selector), a searchable server list with a ping per row, and a connect button —
+which closes when it loses focus unless pinned. The panel's window is made once,
+hidden, and only shown and put away after that, so it is there the moment the
+icon is clicked; it is placed against the icon itself rather than the taskbar,
+so that with the icon in the hidden-icons flyout it sits above the flyout
+instead of over it. A right click opens the menu every other icon there has:
+open, connect or disconnect, quit.
 
 Only one copy runs (`instance.rs`): a named mutex marks the first, and a second
 launch passes its request — show the window, or a link — down a per-user pipe
@@ -416,7 +426,8 @@ A Z`, absolute and relative, with arcs converted to cubics — because getting a
 smooth curve or an arc wrong shows up as a visibly wrong glyph rather than as an
 error.
 
-Fonts are Onest (UI/body) and Unbounded (display), embedded in the binary with
+Fonts are Onest (UI/body), Unbounded (display) and JetBrains Mono (figures, the
+log), embedded in the binary with
 `include_bytes!` rather than registered from a bundle: a portable `.exe` has
 nowhere to register from, and a build that silently fell back to Segoe UI would
 not look like this product. They are fetched as **static instances** — one file
@@ -438,6 +449,36 @@ numbers on the screen; how much plan remains is what people open the app to
 check.
 
 The sidebar collapses to a 72pt icon rail; the wordmark is the toggle.
+
+### Glass, and what it takes on this renderer
+
+The surfaces are the macOS client's Liquid Glass translated, not its flat
+fallback: `surface` and its steps are translucent washes over the canvas (and,
+through Mica, the desktop), lit from above by a gradient, rimmed with a hairline,
+and in the light theme lifted by a soft shadow — white glass on an off-white
+canvas. What has to hide the page under it (a menu, a dialog, the sidebar) takes
+the solid `raised` or `rail` instead. `theme.rs` has the three shapes: `glass`,
+`control`, `floating`.
+
+Three things about iced decide whether that looks and moves right, and none of
+them announces itself:
+
+- **`web-colors` is on.** Without it the renderer blends in linear light, where
+  a 10% white hairline over black comes out a third grey and a 10% black one
+  over white all but vanishes — every wash and hairline in the palette at the
+  wrong weight, in opposite directions in the two themes.
+- **A canvas cache lives in the widget's state, not in the program.** The view
+  is rebuilt for every frame, so a `Cache` held in the `Program` struct is a new,
+  empty one each time: every icon on screen was being parsed and tessellated
+  again on every frame.
+- **Animations tick on `window::frames()`, not a timer.** One tick per frame the
+  display shows — 144 on a 144 Hz screen — where a 16 ms timer was out of step
+  with every refresh rate.
+
+Two more for anything long: a list of same-height rows builds only the rows in
+view (the subscription's rules), and core log lines wait in a buffer rather than
+each being a message — a message redraws the window, and a connected core writes
+a line per connection.
 
 ### Page changes do not cross-fade
 

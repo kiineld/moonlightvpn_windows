@@ -62,10 +62,13 @@ function New-Instance($source, $weight, $name) {
 
 Get-Variable-Font "$base/onest/Onest%5Bwght%5D.ttf"         'Onest[wght].ttf'
 Get-Variable-Font "$base/unbounded/Unbounded%5Bwght%5D.ttf" 'Unbounded[wght].ttf'
+Get-Variable-Font "$base/jetbrainsmono/JetBrainsMono%5Bwght%5D.ttf" 'JetBrainsMono[wght].ttf'
 
 New-Instance 'Onest[wght].ttf'     500 'Onest-Medium.ttf'
 New-Instance 'Onest[wght].ttf'     700 'Onest-Bold.ttf'
 New-Instance 'Onest[wght].ttf'     800 'Onest-ExtraBold.ttf'
 New-Instance 'Unbounded[wght].ttf' 800 'Unbounded-ExtraBold.ttf'
+# The mono face: figures, the log, rule values. One weight, the body's own.
+New-Instance 'JetBrainsMono[wght].ttf' 500 'JetBrainsMono-Medium.ttf'
 
 Get-ChildItem resources\fonts

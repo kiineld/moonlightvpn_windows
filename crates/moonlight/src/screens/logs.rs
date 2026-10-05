@@ -4,7 +4,7 @@
 //! no cause; together it is "the app switched to TUN, then the core could not
 //! take the route".
 
-use iced::widget::{button, column, row, text, text_input};
+use iced::widget::{button, column, container, row, scrollable, text, text_input};
 use iced::{Alignment, Element, Length};
 
 use moonlight_core::controller::{level_rank, LogSource};
@@ -68,18 +68,44 @@ pub fn view(app: &Moonlight) -> Element<'_, Message> {
         })
         .collect();
 
-    let mut list = column![].spacing(1);
+    // ponytail: the newest SHOWN lines only. Rows wrap, so they are not one
+    // height and the list cannot build just the ones in view; two thousand of
+    // them laid out on every arriving line is what made this page drag. The
+    // filters reach the older ones. Give rows one height if all of them ever
+    // have to scroll.
+    const SHOWN: usize = 400;
+    let older = matching.len().saturating_sub(SHOWN);
+
+    let mut list = column![].spacing(0);
     if matching.is_empty() {
         list = list.push(components::empty_state(t(S::NoLogs, locale), palette));
     } else {
-        // Newest last, and the scrollable starts at the top — a log read from
-        // the beginning is how you find the line before the failure.
-        for entry in matching {
-            let ink = match level_rank(&entry.level) {
-                3 => palette.danger,
-                2 => palette.warning,
-                0 => palette.text_muted,
-                _ => palette.text2,
+        // Newest last, and the list is kept at its end: what just happened is
+        // what a log is opened for. Scrolling back stops it following, and
+        // returning to the end starts it again — see `Message::LogScrolled`.
+        for entry in matching.into_iter().skip(older) {
+            let rank = level_rank(&entry.level);
+            let (level, ink) = match rank {
+                3 => ("ERROR", palette.danger),
+                2 => ("WARN", palette.warning),
+                0 => ("DEBUG", palette.text_muted),
+                _ => ("INFO", palette.text_muted),
+            };
+            // Only what went wrong is set in the text colour's full strength
+            // or a signal's; a page of ordinary lines is quiet, so the eye
+            // lands on the one that is not.
+            let said = if rank >= 2 {
+                palette.text
+            } else {
+                palette.text2
+            };
+            let label = |content: &'static str, tone, width| {
+                text(content)
+                    .font(moonlight_design::mono())
+                    .size(LABEL)
+                    .line_height(LINE)
+                    .color(tone)
+                    .width(Length::Fixed(width))
             };
             list = list.push(
                 row![
@@ -87,42 +113,71 @@ pub fn view(app: &Moonlight) -> Element<'_, Message> {
                     // happened and nothing about how long the step before took.
                     text(clock(entry.at))
                         .font(moonlight_design::mono())
-                        .size(scale::MICRO)
+                        .size(LABEL)
+                        .line_height(LINE)
                         .color(palette.text_muted)
-                        .width(Length::Fixed(58.0)),
+                        .width(Length::Fixed(62.0)),
                     // The source, so the two timelines can be told apart at a
                     // glance without reading the message.
-                    text(match entry.source {
-                        LogSource::Core => "core",
-                        LogSource::App => "app",
-                    })
-                    .font(moonlight_design::mono())
-                    .size(scale::MICRO)
-                    .color(palette.text_muted)
-                    .width(Length::Fixed(38.0)),
-                    text(entry.level.clone())
-                        .font(moonlight_design::mono())
-                        .size(scale::MICRO)
-                        .color(ink)
-                        .width(Length::Fixed(58.0)),
+                    label(
+                        match entry.source {
+                            LogSource::Core => "core",
+                            LogSource::App => "app",
+                        },
+                        palette.text_muted,
+                        34.0
+                    ),
+                    label(level, ink, 44.0),
                     text(entry.message.clone())
                         .font(moonlight_design::mono())
-                        .size(scale::META)
-                        .color(palette.text),
+                        .size(SAID)
+                        .line_height(LINE)
+                        .color(said)
+                        .width(Length::Fill),
                 ]
-                .spacing(8)
-                .padding([3, 8]),
+                .spacing(12)
+                .padding([4, 4]),
             );
         }
     }
 
+    // The list scrolls on its own inside its panel, under controls that stay
+    // put, so there is one place — its end — to keep it at.
+    let list = scrollable(list.padding(iced::Padding {
+        right: crate::SCROLLBAR_GUTTER,
+        ..iced::Padding::ZERO
+    }))
+    .id(crate::LOG_SCROLL)
+    .on_scroll(Message::LogScrolled)
+    .direction(scrollable::Direction::Vertical(
+        scrollable::Scrollbar::new()
+            .width(crate::SCROLLBAR_WIDTH)
+            .scroller_width(crate::SCROLLBAR_WIDTH)
+            .margin(crate::SCROLLBAR_MARGIN),
+    ))
+    .width(Length::Fill)
+    .height(Length::Fill)
+    .style(move |theme, _| theme::scroller(palette, theme));
+
     column![
         controls,
         vspace(Length::Fixed(14.0)),
-        components::surface(list, palette),
+        container(list)
+            .padding(components::SURFACE_PADDING)
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .style(move |_| theme::panel(palette)),
     ]
+    .height(Length::Fill)
     .into()
 }
+
+/// The log's type: the message a step above its three labels, and all four on
+/// one line height so a row's columns share a baseline.
+const SAID: f32 = 12.5;
+const LABEL: f32 = 11.5;
+const LINE: iced::widget::text::LineHeight =
+    iced::widget::text::LineHeight::Absolute(iced::Pixels(19.0));
 
 /// `HH:MM:SS` in the machine's own time zone.
 fn clock(unix: i64) -> String {

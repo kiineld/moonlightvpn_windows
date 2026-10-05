@@ -101,6 +101,15 @@ strings! {
     TrafficResets   => "Трафик обновится"   / "Traffic resets",
     RefreshDone     => "Подписка обновлена" / "Subscription updated",
     RefreshFailed   => "Подписка не обновлена" / "Subscription not updated",
+    RefreshDoneDetail => "Серверы, дни и трафик — актуальные" / "Servers, days and traffic are up to date",
+    // The notes at the foot of the window: what just happened, and why not.
+    ConnectFailed   => "Не удалось подключиться" / "Could not connect",
+    NoteProblem     => "Не получилось"      / "That did not work",
+    RulesApplied    => "Правила применены"  / "Rules applied",
+    RulesAppliedDetail => "Трафик уже идёт по ним" / "Traffic already follows them",
+    RulesNotApplied => "Правила не применены" / "Rules not applied",
+    ImportAdded     => "Подписка добавлена" / "Subscription added",
+    ImportNotAdded  => "Подписка не добавлена" / "Subscription not added",
     OfTraffic       => "трафика"            / "of traffic",
 
     // Problems, worded by the app — never the service's or the core's text,
@@ -204,6 +213,10 @@ strings! {
     NoLogs          => "Пока ничего не записано" / "Nothing logged yet",
     CloseAll        => "Закрыть все"        / "Close all",
     ColProcess      => "ПРОЦЕСС"            / "PROCESS",
+    ColChain        => "ЦЕПОЧКА"            / "CHAIN",
+    ColRule         => "ПРАВИЛО"            / "RULE",
+    ColNetwork      => "СЕТЬ"               / "NETWORK",
+    ColTime         => "ВРЕМЯ"              / "TIME",
     ColHost         => "ХОСТ"               / "HOST",
     ClearLogs       => "Очистить"           / "Clear",
     FilterText      => "Фильтр"             / "Filter",
@@ -266,6 +279,8 @@ strings! {
     PingAll         => "Пинг всех"          / "Ping all",
     NothingFound    => "Ничего не найдено"  / "Nothing found",
     OpenWindow      => "Открыть"            / "Open",
+    Quit            => "Выйти"              / "Quit",
+    KeepOpen        => "Не закрывать"       / "Keep open",
     DisconnectVerb  => "Отключиться"        / "Disconnect",
 
     // A moonlight:// link

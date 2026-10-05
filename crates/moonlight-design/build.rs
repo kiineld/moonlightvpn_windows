@@ -17,6 +17,7 @@ const FACES: &[&str] = &[
     "Onest-Bold.ttf",
     "Onest-ExtraBold.ttf",
     "Unbounded-ExtraBold.ttf",
+    "JetBrainsMono-Medium.ttf",
 ];
 
 fn main() {

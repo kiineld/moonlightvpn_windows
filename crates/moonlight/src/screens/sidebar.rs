@@ -125,13 +125,17 @@ pub fn view<'a>(
     container(content)
         .width(Length::Fixed(width))
         .height(Length::Fill)
+        // Structure, so the heavier material: solid where the page's cards
+        // are glass. Solid is also what lets the tab be laid over this
+        // panel's own edge and hide it.
         .style(move |_| container::Style {
-            background: Some(Background::Color(palette.surface)),
+            background: Some(Background::Color(palette.rail)),
             border: Border {
                 radius: iced::border::Radius::from(radii::CARD_LG),
                 width: border::HAIRLINE,
                 color: palette.hairline,
             },
+            shadow: theme::lift(palette, 28.0),
             ..Default::default()
         })
         .into()
@@ -242,7 +246,7 @@ impl<Message> canvas::Program<Message> for Tab {
             b.line_to(Point::new(0.0, middle - reach));
             b.close();
         });
-        frame.fill(&body, self.palette.surface);
+        frame.fill(&body, self.palette.rail);
         frame.stroke(
             &Path::new(swell),
             Stroke::default()

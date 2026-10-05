@@ -30,7 +30,7 @@ pub fn view(app: &Moonlight) -> Element<'_, Message> {
             Some(Message::Navigate(Page::Import)),
             palette,
         ))
-        .padding(18)
+        .padding(components::GROUP_PADDING)
         .style(move |_| crate::theme::panel(palette))
         .into();
     }
@@ -41,11 +41,19 @@ pub fn view(app: &Moonlight) -> Element<'_, Message> {
             .width(Length::FillPortion(1)),
         actions(app).width(Length::FillPortion(1)),
     ]
-    .spacing(20);
+    .spacing(16);
 
     match app.announce() {
         Some(message) => column![
-            components::announce_banner(message, Message::DismissAnnounce, palette),
+            // As wide as the page, which is as wide as the window lets it be:
+            // measured for a narrow one, so a wider one only arrives early.
+            components::announce_banner(
+                message,
+                app.announce_openness(),
+                760.0,
+                Message::ToggleAnnounce,
+                palette
+            ),
             columns,
         ]
         .spacing(14)
@@ -101,9 +109,13 @@ fn plan_card(app: &Moonlight) -> Element<'_, Message> {
                 .unwrap_or_else(|| t(S::NavSubscription, locale).to_string())
         )
         .font(moonlight_design::display())
-        .size(scale::HERO)
+        // The plan's name on one line, as the macOS card sets it: at the hero
+        // step "moonlight vpn" filled the card's width and its emoji fell to
+        // a line of its own.
+        .size(scale::TITLE)
+        .wrapping(iced::widget::text::Wrapping::None)
         .color(palette.text_on_accent),
-        vspace(Length::Fixed(6.0)),
+        vspace(Length::Fixed(10.0)),
         // No device count: Remnawave does not report one on every plan, so the
         // figure was usually a dash sitting between two real numbers.
         row![
@@ -186,14 +198,18 @@ fn actions(app: &Moonlight) -> iced::widget::Column<'_, Message> {
 
     // What the row says under its title: syncing, when it last worked, or
     // what it offers. It used to say "just now" whether or not it ever had.
+    // And when the last one failed, why — here, quietly, for a refresh the
+    // app made on its own; one the user asked for says so in a note as well.
     let refreshed = if app.is_refreshing() {
         t(S::RefreshMetaSyncing, locale).to_string()
+    } else if let Some(issue) = app.refresh_issue() {
+        localization::issue(issue, locale)
     } else {
         app.last_updated()
             .unwrap_or_else(|| t(S::RefreshMetaIdle, locale).to_string())
     };
 
-    let mut refresh = column![components::surface(
+    let refresh = column![components::group(
         components::action_row(
             Icon::RefreshCw,
             palette.accent,
@@ -207,19 +223,10 @@ fn actions(app: &Moonlight) -> iced::widget::Column<'_, Message> {
         palette
     )]
     .spacing(10);
-    if let Some(issue) = app.refresh_issue() {
-        refresh = refresh.push(
-            container(components::issue_line(
-                localization::issue(issue, locale),
-                palette,
-            ))
-            .padding([0, 6]),
-        );
-    }
 
     column![
         refresh,
-        components::surface(
+        components::group(
             column![
                 components::action_row(
                     Icon::Sparkles,
@@ -234,7 +241,7 @@ fn actions(app: &Moonlight) -> iced::widget::Column<'_, Message> {
                     Some(Message::OpenUrl(TELEGRAM_BOT_URL)),
                     palette,
                 ),
-                components::divider(palette),
+                components::row_divider(palette),
                 components::action_row(
                     Icon::Globe,
                     palette.cat3,
@@ -248,7 +255,7 @@ fn actions(app: &Moonlight) -> iced::widget::Column<'_, Message> {
                 // No "add a subscription" beside an active one: importing
                 // replaces it, so the row promised something the app does not
                 // do. Removing it brings the empty state and its add row back.
-                components::divider(palette),
+                components::row_divider(palette),
                 components::action_row(
                     Icon::Trash2,
                     palette.danger,

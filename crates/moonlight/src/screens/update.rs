@@ -48,6 +48,6 @@ pub fn banner<'a>(app: &'a Moonlight, version: &'a str) -> Element<'a, Message> 
 
     container(row![open, close].spacing(4).align_y(Alignment::Center))
         .padding(6)
-        .style(move |_| theme::panel(palette))
+        .style(move |_| theme::floating(palette, moonlight_design::motion::radii::PANEL))
         .into()
 }

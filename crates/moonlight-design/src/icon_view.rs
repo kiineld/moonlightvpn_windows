@@ -4,6 +4,8 @@
 //! and the path is never filled — that is what keeps these identical to the
 //! design rather than merely similar.
 
+use std::cell::Cell;
+
 use iced::widget::canvas::{self, Cache, Geometry, LineCap, LineJoin, Stroke};
 use iced::{mouse, Color, Element, Length, Rectangle, Renderer, Size, Theme};
 
@@ -18,7 +20,18 @@ pub struct IconView {
     icon: Icon,
     stroke_width: f32,
     color: Color,
+}
+
+/// A glyph's drawing, and what it was drawn as.
+///
+/// Kept in the widget's state, which outlives a redraw — the `IconView` does
+/// not: the view is rebuilt for every frame, so a cache held in it was a new,
+/// empty one each time, and every glyph on screen was parsed and tessellated
+/// again sixty times a second.
+#[derive(Default)]
+pub struct Drawn {
     cache: Cache,
+    of: Cell<Option<(Icon, u32, [u32; 4])>>,
 }
 
 impl IconView {
@@ -29,7 +42,6 @@ impl IconView {
             icon,
             stroke_width: 2.0,
             color,
-            cache: Cache::new(),
         }
     }
 
@@ -42,17 +54,28 @@ impl IconView {
 }
 
 impl<Message> canvas::Program<Message> for IconView {
-    type State = ();
+    type State = Drawn;
 
     fn draw(
         &self,
-        _state: &Self::State,
+        state: &Self::State,
         renderer: &Renderer,
         _theme: &Theme,
         bounds: Rectangle,
         _cursor: mouse::Cursor,
     ) -> Vec<Geometry> {
-        let geometry = self.cache.draw(renderer, bounds.size(), |frame| {
+        // Drawn again only when it is a different glyph, weight or colour; a
+        // different size the cache notices itself.
+        let Color { r, g, b, a } = self.color;
+        let of = (
+            self.icon,
+            self.stroke_width.to_bits(),
+            [r, g, b, a].map(f32::to_bits),
+        );
+        if state.of.replace(Some(of)) != Some(of) {
+            state.cache.clear();
+        }
+        let geometry = state.cache.draw(renderer, bounds.size(), |frame| {
             let rect = Rectangle::new(iced::Point::ORIGIN, frame.size());
             // lucide's stroke-width is expressed in the 24×24 viewBox, so it
             // scales with the glyph rather than staying a fixed device width.

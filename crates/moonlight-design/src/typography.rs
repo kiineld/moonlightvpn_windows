@@ -37,7 +37,10 @@ pub const FONT_BYTES: &[&[u8]] = &[
     include_bytes!(concat!(env!("OUT_DIR"), "/Onest-Bold.ttf")),
     include_bytes!(concat!(env!("OUT_DIR"), "/Onest-ExtraBold.ttf")),
     include_bytes!(concat!(env!("OUT_DIR"), "/Unbounded-ExtraBold.ttf")),
+    include_bytes!(concat!(env!("OUT_DIR"), "/JetBrainsMono-Medium.ttf")),
 ];
+
+pub const MONO_FAMILY: &str = "JetBrains Mono";
 
 /// Onest at a weight. The default body weight is 500 — the lightest the design
 /// uses.
@@ -60,10 +63,12 @@ pub fn display() -> Font {
     }
 }
 
-/// The mono face carries timers, latency figures and the subscription URL.
+/// The mono face carries latency figures, speeds, rule values and the log.
 ///
-/// Not bundled: Consolas ships with every Windows since Vista, has the tabular
-/// digits a ticking `00:00:00` needs, and costs nothing in the binary.
+/// JetBrains Mono, bundled like the other two and at the body's own weight.
+/// It was Consolas, which costs nothing in the binary but is a face from 2007
+/// set a weight lighter than everything around it: a page of log lines in it
+/// read as a different, older application inside this one.
 ///
 /// It is named **explicitly** rather than left as [`Font::MONOSPACE`]. That
 /// constant is the generic `monospace` family, which fontdb does not resolve to
@@ -72,16 +77,10 @@ pub fn display() -> Font {
 /// advance. The timer renders as `00: 00: 00` and every `.exe` in the app list
 /// as `name. exe` — a spacing bug with no error attached to it.
 pub fn mono() -> Font {
-    #[cfg(windows)]
-    {
-        Font {
-            family: Family::Name("Consolas"),
-            ..Font::DEFAULT
-        }
-    }
-    #[cfg(not(windows))]
-    {
-        Font::MONOSPACE
+    Font {
+        family: Family::Name(MONO_FAMILY),
+        weight: Weight::Medium,
+        ..Font::DEFAULT
     }
 }
 
@@ -158,7 +157,9 @@ mod tests {
         // with a far wider advance, and the timer renders as `00: 00: 00`.
         // Nothing errors — it just looks broken.
         assert_ne!(mono(), Font::MONOSPACE);
-        assert_eq!(mono().family, Family::Name("Consolas"));
+        assert_eq!(mono().family, Family::Name(MONO_FAMILY));
+        // And it is one of the faces compiled in, not one hoped to be installed.
+        assert_eq!(FONT_BYTES.len(), 5);
     }
 
     #[test]

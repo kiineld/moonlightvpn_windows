@@ -182,15 +182,7 @@ pub fn view<'a>(app: &'a Moonlight, editor: &'a RuleEditor) -> Element<'a, Messa
     )
     .width(Length::Fixed(620.0))
     .max_height(760.0)
-    .style(move |_| container::Style {
-        background: Some(Background::Color(palette.surface)),
-        border: Border {
-            radius: iced::border::Radius::from(radii::PANEL),
-            width: 1.0,
-            color: palette.hairline,
-        },
-        ..Default::default()
-    });
+    .style(move |_| theme::floating(palette, radii::PANEL));
 
     opaque(
         container(card)
