@@ -161,6 +161,17 @@ jobs:
             Unsigned, so SmartScreen will warn on first run: **More info →
             Run anyway**.
 
+            Fixed in 0.13.1:
+
+            - Chrome, Edge or any browser with secure DNS on (Google,
+              Cloudflare) works in TUN again. It used to fail with
+              ERR_CONNECTION_CLOSED: the browser resolved names itself, so the
+              tunnel saw only addresses and none of the subscription's rules
+              could match — Russian sites went through the server instead of
+              direct, and the connections page listed IPs. The core now reads
+              each connection's host name and routes on it, as Flowvy and the
+              macOS client do.
+
             New in 0.13.0:
 
             - The look of the macOS client, properly: cards, pills and the
