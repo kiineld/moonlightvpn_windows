@@ -11,6 +11,7 @@
 //!   and an unbound listener is an open proxy on the network
 //! - the TUN block, when the tunnel runs in TUN mode
 //! - the user's own rules, placed around the panel's (see [`rules::place`])
+//! - a sniffer, when the panel has none switched on (see [`sniffer_block`])
 
 use serde_yaml::{Mapping, Value};
 use thiserror::Error;
@@ -172,6 +173,19 @@ pub fn build(panel_yaml: &str, overrides: &Overrides) -> Result<String, Failure>
         Value::Sequence(composed.into_iter().map(Value::from).collect()),
     );
 
+    // Sniffer. A panel that switched one on means it, and keeps it. One that
+    // has none — or has one switched off, as mihomo's sample config ships it —
+    // gets the app's, because without it the rules above go blind the moment a
+    // browser resolves names itself.
+    let panel_sniffer_on = root
+        .get(key("sniffer"))
+        .and_then(|s| s.get("enable"))
+        .and_then(Value::as_bool)
+        == Some(true);
+    if !panel_sniffer_on {
+        root.insert(key("sniffer"), Value::Mapping(sniffer_block()));
+    }
+
     // TUN
     if overrides.mode == TunnelMode::Tun {
         root.insert(key("tun"), Value::Mapping(tun_block()));
@@ -304,6 +318,62 @@ pub fn routing_inputs(panel_yaml: &str) -> (Vec<String>, Vec<String>) {
         .filter_map(|r| r.as_str().map(str::to_string))
         .collect();
     (groups, rules)
+}
+
+/// Has the core read the hostname out of a connection that arrived as a bare
+/// address.
+///
+/// A browser on secure DNS — Chrome's "Use secure DNS" with Google or
+/// Cloudflare — resolves names itself, over HTTPS, past the core's DNS. In TUN
+/// its connections then reach the core as bare addresses, with nothing for the
+/// fake-ip table to map back, so no `DOMAIN-SUFFIX` or `GEOSITE` rule can match
+/// them: everything fell through to the catch-all and went to the server as a
+/// bare address — a `.ru` site the panel sends `DIRECT` included, and IPv6 ones
+/// the core's own DNS (`ipv6: false`) never hands out — and the connections
+/// screen listed addresses where it had always listed hosts. The browser saw
+/// `ERR_CONNECTION_CLOSED` wherever the far end could not carry that.
+///
+/// With the sniffer the core reads the name from the TLS ClientHello, the QUIC
+/// Initial, or the HTTP `Host` header, matches the rules on it, and —
+/// `override-destination` — dials the *name* rather than the address: the
+/// server resolves it the way it can reach it, and a `DIRECT` connection
+/// resolves it through the panel's DNS, Yandex for Russian names. Ports and
+/// skips are those of the example configs in mihomo's documentation; the three
+/// switches are the core's own defaults for a sniffer that is on, written out so
+/// the config says what it does. The same block the macOS client writes.
+pub fn sniffer_block() -> Mapping {
+    let ports = |list: &[&str]| -> Value {
+        let mut protocol = Mapping::new();
+        // Ports as strings: a range has to be one, and the core's parser takes
+        // a list of them.
+        protocol.insert(
+            key("ports"),
+            Value::Sequence(list.iter().map(|p| Value::from(*p)).collect()),
+        );
+        Value::Mapping(protocol)
+    };
+
+    let mut sniff = Mapping::new();
+    sniff.insert(key("HTTP"), ports(&["80", "8080-8880"]));
+    sniff.insert(key("TLS"), ports(&["443", "8443"]));
+    sniff.insert(key("QUIC"), ports(&["443", "8443"]));
+
+    let mut sniffer = Mapping::new();
+    sniffer.insert(key("enable"), Value::from(true));
+    // Sniff connections that came in as a bare address — the browser case — and
+    // those whose name the core could only recover from a real (not fake) IP it
+    // had answered with.
+    sniffer.insert(key("parse-pure-ip"), Value::from(true));
+    sniffer.insert(key("force-dns-mapping"), Value::from(true));
+    sniffer.insert(key("override-destination"), Value::from(true));
+    sniffer.insert(key("sniff"), Value::Mapping(sniff));
+    // Apple's push service is left at the address the system chose for it, as
+    // those examples leave it.
+    sniffer.insert(
+        key("skip-domain"),
+        Value::Sequence(vec![Value::from("+.push.apple.com")]),
+    );
+    sniffer
 }
 
 pub fn tun_block() -> Mapping {
@@ -726,6 +796,81 @@ rules:
             .and_then(Value::as_mapping)
             .expect("dns");
         assert_eq!(dns.get(key("enable")).and_then(Value::as_bool), Some(true));
+    }
+
+    #[test]
+    fn a_panel_with_no_sniffer_gets_the_apps_in_either_mode() {
+        // A browser on secure DNS reaches the core with bare addresses, and
+        // without a sniffer no domain rule can match them.
+        for mode in [TunnelMode::SystemProxy, TunnelMode::Tun] {
+            let mut o = overrides();
+            o.mode = mode;
+            let root = parse(&build(PANEL, &o).expect("builds"));
+            let sniffer = root
+                .get(key("sniffer"))
+                .and_then(Value::as_mapping)
+                .expect("sniffer");
+            let flag = |name: &str| sniffer.get(key(name)).and_then(Value::as_bool);
+            assert_eq!(flag("enable"), Some(true), "{mode:?}");
+            // A connection to a bare address is sniffed, and dialled by the
+            // name found rather than the address the browser resolved.
+            assert_eq!(flag("parse-pure-ip"), Some(true));
+            assert_eq!(flag("override-destination"), Some(true));
+
+            let ports = |protocol: &str| -> Vec<String> {
+                sniffer
+                    .get(key("sniff"))
+                    .and_then(|s| s.get(protocol))
+                    .and_then(|p| p.get("ports"))
+                    .and_then(Value::as_sequence)
+                    .expect("ports")
+                    .iter()
+                    .filter_map(|p| p.as_str().map(str::to_string))
+                    .collect()
+            };
+            assert_eq!(ports("TLS"), ["443", "8443"]);
+            // QUIC too, which a browser uses wherever a site offers it.
+            assert_eq!(ports("QUIC"), ["443", "8443"]);
+            // A range survives as a string.
+            assert_eq!(ports("HTTP"), ["80", "8080-8880"]);
+        }
+    }
+
+    #[test]
+    fn a_panels_own_sniffer_is_kept_as_it_wrote_it() {
+        let panel = format!(
+            "{PANEL}\nsniffer:\n  enable: true\n  override-destination: false\n  sniff:\n    TLS: {{ports: [443]}}\n"
+        );
+        let root = parse(&build(&panel, &overrides()).expect("builds"));
+        let sniffer = root
+            .get(key("sniffer"))
+            .and_then(Value::as_mapping)
+            .expect("sniffer");
+        assert_eq!(
+            sniffer
+                .get(key("override-destination"))
+                .and_then(Value::as_bool),
+            Some(false)
+        );
+        // And not merged with the app's.
+        assert!(sniffer
+            .get(key("sniff"))
+            .and_then(|s| s.get("QUIC"))
+            .is_none());
+    }
+
+    #[test]
+    fn a_switched_off_sniffer_is_replaced_by_the_apps() {
+        // mihomo's sample config ships one switched off, which is not a reason
+        // to leave the rules blind.
+        let panel = format!("{PANEL}\nsniffer:\n  enable: false\n");
+        let root = parse(&build(&panel, &overrides()).expect("builds"));
+        assert_eq!(
+            root.get(key("sniffer"))
+                .and_then(|s| s.get("enable"))
+                .and_then(Value::as_bool),
+            Some(true)
+        );
     }
 
     #[test]

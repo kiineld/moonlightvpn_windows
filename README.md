@@ -234,6 +234,27 @@ the log for that line before reporting success, and names the cause rather than
 quoting the core. The Windows-specific case, a Wintun adapter that could not be
 created, points at the privilege it needs instead of the API call that failed.
 
+### Browsers on secure DNS
+
+A browser with secure DNS on — Chrome's "Use secure DNS" with Google or
+Cloudflare — resolves names itself, over HTTPS, past the core's DNS. In TUN its
+connections then reach the core as **bare addresses**: the fake-ip table has
+nothing to map back, so no `DOMAIN-SUFFIX` or `GEOSITE` rule can match. Every
+one fell through to the catch-all and went to the server as an address — the
+`.ru` sites the subscription sends `DIRECT` included, and IPv6 addresses the
+core's own DNS never hands out — and the browser showed `ERR_CONNECTION_CLOSED`
+wherever the far end could not carry that. The connections page listed
+addresses instead of hosts.
+
+So the config always carries a **sniffer**: the core reads the name from the TLS
+ClientHello, the QUIC Initial or the HTTP `Host` header, routes on it, and dials
+the name rather than the address (`override-destination`), so the server
+resolves it the way it can reach it and a `DIRECT` connection resolves it
+through the subscription's DNS. A subscription that switches its own sniffer on
+keeps it; one with none, or with one switched off, gets the app's. The
+connections page shows the core's `sniffHost` before falling back to the
+address. The block is the macOS client's, value for value.
+
 ## Rules
 
 The rules page replaces the apps screen and its split modes, as on macOS and
@@ -286,7 +307,8 @@ order this client tries them is load-bearing:
 
 The panel's document is then kept **verbatim**. The config builder overrides only
 what the client must own — the API address and secret, the local port,
-`allow-lan: false` and a loopback bind, the TUN block, and the split rules. A
+`allow-lan: false` and a loopback bind, the TUN block, the split rules, and a
+sniffer where the panel has none on (see *Browsers on secure DNS*). A
 panel that ships a `geosite:category-ru → DIRECT` rule means it, and its tuning
 is usually better than anything generated here.
 

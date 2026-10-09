@@ -494,9 +494,12 @@ fn parse_connection(entry: &Value) -> Option<Connection> {
             .map(str::to_string)
     };
 
-    // `host` is empty for a connection opened straight to an address, in which
-    // case the destination IP is the only name there is.
+    // `host` is empty for a connection opened straight to an address. The
+    // sniffer then usually has the name — in `host` itself when it overrides the
+    // destination, as the app's does, in `sniffHost` when a panel's own sniffer
+    // does not — and failing that the destination IP is the only name there is.
     let host = text(meta, "host")
+        .or_else(|| text(meta, "sniffHost"))
         .or_else(|| text(meta, "destinationIP"))
         .unwrap_or_else(|| "—".to_string());
     let port = text(meta, "destinationPort").or_else(|| {
@@ -616,6 +619,19 @@ mod tests {
         .unwrap();
         let c = parse_connection(&entry).expect("parses");
         assert_eq!(c.host, "1.2.3.4:443");
+    }
+
+    #[test]
+    fn a_sniffed_name_is_shown_before_the_bare_address() {
+        // A panel's own sniffer that does not override the destination leaves
+        // `host` empty and the name it read in `sniffHost`.
+        let entry: Value = serde_json::from_str(
+            r#"{"id":"s","metadata":{"host":"","sniffHost":"www.youtube.com",
+                "destinationIP":"142.250.74.14","destinationPort":"443"}}"#,
+        )
+        .unwrap();
+        let c = parse_connection(&entry).expect("parses");
+        assert_eq!(c.host, "www.youtube.com:443");
     }
 
     #[test]
